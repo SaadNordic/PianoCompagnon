@@ -8,6 +8,12 @@ if not exist libs\anthropic "%PY%" -m pip install --quiet --target libs anthropi
 echo Version web...
 cd /d "%~dp0.."
 call npm run build || goto fin
+echo Verification : aucune lecture de partition en cours...
+powershell -NoProfile -Command "try { $p = Invoke-RestMethod http://192.168.1.240:8010/api/ping -TimeoutSec 8; if ($p.scansRunning -gt 0) { exit 1 } } catch { }"
+if errorlevel 1 (
+    echo [ATTENTION] Une lecture de partition est en cours sur le serveur. Reessayez dans quelques minutes.
+    goto fin
+)
 echo Arret du service...
 schtasks /end /s 192.168.1.240 /tn "PianoCompagnon" >nul 2>&1
 timeout /t 8 /nobreak >nul

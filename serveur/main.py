@@ -72,6 +72,9 @@ if DB_KIND == "mssql":
         """IF OBJECT_ID('pc_kv') IS NULL CREATE TABLE pc_kv (
             user_id INT NOT NULL, k NVARCHAR(100) NOT NULL, v NVARCHAR(MAX) NULL, updated BIGINT NOT NULL,
             rev BIGINT NOT NULL, PRIMARY KEY (user_id, k))""",
+        """IF OBJECT_ID('pc_scans') IS NULL CREATE TABLE pc_scans (
+            id NVARCHAR(32) PRIMARY KEY, user_id INT NOT NULL, state NVARCHAR(10) NOT NULL, measures INT NOT NULL,
+            text NVARCHAR(MAX) NULL, error NVARCHAR(400) NULL, truncated INT NOT NULL DEFAULT 0, started BIGINT NOT NULL)""",
         """IF OBJECT_ID('pc_originals') IS NULL CREATE TABLE pc_originals (
             user_id INT NOT NULL, piece_id NVARCHAR(64) NOT NULL, idx INT NOT NULL, name NVARCHAR(255) NOT NULL,
             type NVARCHAR(100) NOT NULL, data NVARCHAR(MAX) NOT NULL, PRIMARY KEY (user_id, piece_id, idx))""",
@@ -91,6 +94,8 @@ else:
             updated INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, rev INTEGER NOT NULL, PRIMARY KEY (user_id, id))""",
         """CREATE TABLE IF NOT EXISTS pc_kv (user_id INTEGER NOT NULL, k TEXT NOT NULL, v TEXT,
             updated INTEGER NOT NULL, rev INTEGER NOT NULL, PRIMARY KEY (user_id, k))""",
+        """CREATE TABLE IF NOT EXISTS pc_scans (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, state TEXT NOT NULL,
+            measures INTEGER NOT NULL, text TEXT, error TEXT, truncated INTEGER NOT NULL DEFAULT 0, started INTEGER NOT NULL)""",
         """CREATE TABLE IF NOT EXISTS pc_originals (user_id INTEGER NOT NULL, piece_id TEXT NOT NULL, idx INTEGER NOT NULL,
             name TEXT NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (user_id, piece_id, idx))""",
     ]
@@ -167,6 +172,9 @@ _fail_lock = threading.Lock()
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    with db() as cur:
+        cur.execute("UPDATE pc_scans SET state = 'error', error = ? WHERE state = 'running'",
+                    ("Lecture interrompue par un redémarrage du serveur : relancez-la.",))
 
 
 def current_user(authorization: str = Header(default="")) -> int:
@@ -191,7 +199,8 @@ class LoginIn(BaseModel):
 
 @app.get("/api/ping")
 def ping():
-    return {"ok": True, "app": "piano-compagnon", "version": VERSION}
+    running = sum(1 for j in list(_jobs.values()) if j["state"] == "running")
+    return {"ok": True, "app": "piano-compagnon", "version": VERSION, "scansRunning": running}
 
 
 @app.post("/api/login")
@@ -443,7 +452,23 @@ class ScanIn(BaseModel):
     files: list[OriginalIn]
 
 
-def _run_scan(job: dict, files: list[OriginalIn]) -> None:
+def _save_job(jid: str, job: dict) -> None:
+    try:
+        with db() as cur:
+            cur.execute("UPDATE pc_scans SET state = ?, measures = ?, text = ?, error = ?, truncated = ? WHERE id = ?",
+                        (job["state"], job["measures"], job["text"], job["error"], int(job["truncated"]), jid))
+    except Exception:  # noqa: BLE001 - la lecture continue même si l'enregistrement échoue
+        pass
+
+
+def _run_scan(jid: str, job: dict, files: list[OriginalIn]) -> None:
+    try:
+        _scan(jid, job, files)
+    finally:
+        _save_job(jid, job)
+
+
+def _scan(jid: str, job: dict, files: list[OriginalIn]) -> None:
     try:
         import anthropic
     except ImportError:
@@ -468,9 +493,13 @@ def _run_scan(job: dict, files: list[OriginalIn]) -> None:
             system=SCAN_SYSTEM,
             messages=[{"role": "user", "content": blocks}],
         ) as stream:
+            last_saved = 0
             for text in stream.text_stream:
                 job["text"] += text
                 job["measures"] = sum(1 for line in job["text"].splitlines() if line.strip().upper().startswith("M") and "|" in line)
+                if job["measures"] >= last_saved + 10:
+                    last_saved = job["measures"]
+                    _save_job(jid, job)
             msg = stream.get_final_message()
         if msg.stop_reason == "refusal":
             job.update(state="error", error="Claude a refusé de lire ce document.")
@@ -503,15 +532,24 @@ def scan_start(body: ScanIn, uid: int = Depends(current_user)):
         jid = secrets.token_urlsafe(12)
         job = {"uid": uid, "state": "running", "measures": 0, "text": "", "error": None, "truncated": False, "started": time.time()}
         _jobs[jid] = job
-    threading.Thread(target=_run_scan, args=(job, body.files), daemon=True).start()
+    with db() as cur:
+        cur.execute("DELETE FROM pc_scans WHERE started < ?", (now_ms() - 30 * MS_DAY,))
+        cur.execute("INSERT INTO pc_scans (id, user_id, state, measures, started) VALUES (?, ?, 'running', 0, ?)", (jid, uid, now_ms()))
+    threading.Thread(target=_run_scan, args=(jid, job, body.files), daemon=True).start()
     return {"job": jid}
 
 
 @app.get("/api/scan/{jid}")
 def scan_status(jid: str, uid: int = Depends(current_user)):
     job = _jobs.get(jid)
+    if job is None:  # serveur redémarré : on relit la base
+        with db() as cur:
+            cur.execute("SELECT user_id, state, measures, text, error, truncated, started FROM pc_scans WHERE id = ?", (jid,))
+            r = cur.fetchone()
+        if r:
+            job = {"uid": r[0], "state": r[1], "measures": r[2], "text": r[3] or "", "error": r[4], "truncated": bool(r[5]), "started": r[6] / 1000}
     if not job or job["uid"] != uid:
-        raise HTTPException(404, "Lecture introuvable (serveur redémarré ?)")
+        raise HTTPException(404, "Lecture introuvable")
     out = {"state": job["state"], "measures": job["measures"], "elapsed": int(time.time() - job["started"]), "error": job["error"]}
     if job["state"] == "done":
         out.update(text=job["text"], truncated=job["truncated"])
