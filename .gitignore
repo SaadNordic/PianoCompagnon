@@ -2,3 +2,7 @@ node_modules
 dist
 dev-dist
 *.log
+
+# cle de signature de l APK : ne jamais publier
+cle-signature/
+android/app/release/

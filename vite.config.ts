@@ -1,14 +1,16 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-// BASE : chemin de publication (ex. "/PianoCompagnon/" sur GitHub Pages).
+// BASE : chemin de publication web. CAPACITOR=1 : version embarquée dans l'APK (sans service worker).
 const base = process.env.BASE ?? '/';
+const native = process.env.CAPACITOR === '1';
 
 export default defineConfig({
   base,
   build: { chunkSizeWarningLimit: 3000 },
   plugins: [
     VitePWA({
+      disable: native,
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'],
       workbox: { maximumFileSizeToCacheInBytes: 8 * 1024 * 1024, globPatterns: ['**/*.{js,css,html,svg,png,xml}'] },

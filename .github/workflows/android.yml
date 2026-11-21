@@ -1,0 +1,76 @@
+name: APK Android
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run build
+        env:
+          CAPACITOR: '1'
+      - run: npx cap sync android
+
+      - name: Cle de signature
+        id: key
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KS" ]; then
+            echo "::warning::Secrets de signature absents : APK de test seulement, pas de publication."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/pc.p12"
+            echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/pc.p12" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compilation
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          if [ "${{ steps.key.outputs.signed }}" = "true" ]; then
+            ./gradlew assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk ../PianoCompagnon.apk
+          else
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk ../PianoCompagnon.apk
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PianoCompagnon-apk
+          path: PianoCompagnon.apk
+
+      - name: Publication (lien de telechargement)
+        if: steps.key.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk --yes --cleanup-tag || true
+          gh release create apk PianoCompagnon.apk --latest \
+            --title "Piano Compagnon - version ${{ github.run_number }}" \
+            --notes "Ouvrez ce lien sur le telephone Android et installez PianoCompagnon.apk."

@@ -1,4 +1,13 @@
-// Entrée MIDI (Web MIDI API). Fonctionne dans Chrome Android avec un câble USB OTG.
+// Entrée MIDI. Dans l'APK : module natif Android (android.media.midi).
+// Dans un navigateur : Web MIDI API (Chrome).
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+
+interface NativeMidi {
+  getDevices(): Promise<{ supported: boolean; names: string[] }>;
+  addListener(ev: 'message', f: (d: { data: number[] }) => void): Promise<PluginListenerHandle>;
+  addListener(ev: 'devices', f: (d: { names: string[] }) => void): Promise<PluginListenerHandle>;
+}
+const nativeMidi = registerPlugin<NativeMidi>('Midi');
 
 type NoteHandler = (midi: number, velocity: number) => void;
 
@@ -17,6 +26,14 @@ class MidiInput {
   readonly held = new Set<number>();
 
   async start(): Promise<void> {
+    if (Capacitor.isNativePlatform()) {
+      await nativeMidi.addListener('message', d => this.handle(d.data));
+      await nativeMidi.addListener('devices', d => this.setNames(d.names));
+      const r = await nativeMidi.getDevices();
+      if (!r.supported) this.setStatus({ state: 'unsupported' });
+      else this.setNames(r.names);
+      return;
+    }
     if (!('requestMIDIAccess' in navigator)) {
       this.setStatus({ state: 'unsupported' });
       return;
@@ -30,6 +47,10 @@ class MidiInput {
     }
   }
 
+  private setNames(names: string[]): void {
+    this.setStatus(names.length ? { state: 'connected', names } : { state: 'none' });
+  }
+
   private bind(): void {
     if (!this.access) return;
     const names: string[] = [];
@@ -41,13 +62,27 @@ class MidiInput {
     this.setStatus(names.length ? { state: 'connected', names } : { state: 'none' });
   }
 
-  private handle(data: Uint8Array | null): void {
-    if (!data || data.length < 3) return;
-    const cmd = data[0] & 0xf0;
-    const note = data[1];
-    const vel = data[2];
-    if (cmd === 0x90 && vel > 0) this.noteOn(note, vel);
-    else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) this.noteOff(note);
+  private running = 0;
+
+  /** Décode un flux d'octets MIDI (plusieurs messages possibles, « running status »). */
+  private handle(data: ArrayLike<number> | null): void {
+    if (!data) return;
+    let i = 0;
+    while (i < data.length) {
+      const b = data[i];
+      if (b >= 0xf8) { i++; continue; } // horloge, active sensing…
+      if (b === 0xf0) { while (i < data.length && data[i] !== 0xf7) i++; i++; continue; } // sysex
+      if (b >= 0xf0) { this.running = 0; i++; continue; }
+      if (b >= 0x80) { this.running = b; i++; } else if (!this.running) { i++; continue; }
+      const cmd = this.running & 0xf0;
+      const len = cmd === 0xc0 || cmd === 0xd0 ? 1 : 2;
+      if (i + len > data.length) break;
+      const note = data[i];
+      const vel = len === 2 ? data[i + 1] : 0;
+      i += len;
+      if (cmd === 0x90 && vel > 0) this.noteOn(note, vel);
+      else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) this.noteOff(note);
+    }
   }
 
   /** Aussi appelé par le clavier à l'écran. */
@@ -74,7 +109,7 @@ export const midiInput = new MidiInput();
 
 export function statusLabel(s: MidiStatus): string {
   switch (s.state) {
-    case 'unsupported': return 'MIDI non disponible dans ce navigateur (utilisez Chrome)';
+    case 'unsupported': return Capacitor.isNativePlatform() ? 'MIDI non pris en charge par cet appareil' : 'MIDI non disponible dans ce navigateur (utilisez Chrome)';
     case 'denied': return 'Accès MIDI refusé';
     case 'none': return 'Aucun piano branché';
     case 'connected': return s.names.join(', ');
