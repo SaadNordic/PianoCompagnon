@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.media.midi.MidiDevice;
 import android.media.midi.MidiDeviceInfo;
+import android.media.midi.MidiInputPort;
 import android.media.midi.MidiManager;
 import android.media.midi.MidiOutputPort;
 import android.media.midi.MidiReceiver;
@@ -27,6 +28,7 @@ import java.util.Map;
 /**
  * Lit les pianos et claviers MIDI branchés en USB (API android.media.midi)
  * et transmet les octets reçus à l'application web (événement "message").
+ * Envoie aussi des notes au piano (méthode "send") : l'appli joue alors avec le vrai son du piano.
  */
 @CapacitorPlugin(name = "Midi")
 public class MidiPlugin extends Plugin {
@@ -34,6 +36,7 @@ public class MidiPlugin extends Plugin {
     private final Map<Integer, MidiDevice> devices = new HashMap<>();
     private final Map<Integer, List<MidiOutputPort>> ports = new HashMap<>();
     private final Map<Integer, String> names = new HashMap<>();
+    private final Map<Integer, MidiInputPort> outs = new HashMap<>();
     private final Handler main = new Handler(Looper.getMainLooper());
 
     @Override
@@ -60,7 +63,23 @@ public class MidiPlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("supported", manager != null);
         ret.put("names", namesArray());
+        ret.put("canPlay", !outs.isEmpty());
         call.resolve(ret);
+    }
+
+    /** Envoie des octets MIDI (note on/off, contrôleurs) à tous les pianos branchés. */
+    @PluginMethod
+    public void send(PluginCall call) {
+        JSArray data = call.getArray("data");
+        if (data == null || outs.isEmpty()) { call.resolve(); return; }
+        byte[] bytes = new byte[data.length()];
+        try {
+            for (int i = 0; i < bytes.length; i++) bytes[i] = (byte) data.getInt(i);
+        } catch (Exception e) { call.reject("données MIDI invalides"); return; }
+        for (MidiInputPort port : outs.values()) {
+            try { port.send(bytes, 0, bytes.length); } catch (IOException ignored) { }
+        }
+        call.resolve();
     }
 
     private JSArray namesArray() {
@@ -72,12 +91,13 @@ public class MidiPlugin extends Plugin {
     private void notifyDevices() {
         JSObject o = new JSObject();
         o.put("names", namesArray());
+        o.put("canPlay", !outs.isEmpty());
         notifyListeners("devices", o, true);
     }
 
     private void openDevice(MidiDeviceInfo info) {
-        // un « port de sortie » de l'appareil = les notes qu'il nous envoie
-        if (manager == null || info.getOutputPortCount() == 0 || devices.containsKey(info.getId())) return;
+        // « port de sortie » de l'appareil = les notes qu'il nous envoie ; « port d'entrée » = ce qu'on lui fait jouer
+        if (manager == null || (info.getOutputPortCount() == 0 && info.getInputPortCount() == 0) || devices.containsKey(info.getId())) return;
         manager.openDevice(info, device -> {
             if (device == null) return;
             int id = info.getId();
@@ -99,6 +119,10 @@ public class MidiPlugin extends Plugin {
                 list.add(port);
             }
             ports.put(id, list);
+            if (info.getInputPortCount() > 0) {
+                MidiInputPort in = device.openInputPort(0);
+                if (in != null) outs.put(id, in);
+            }
             Bundle props = info.getProperties();
             String name = props.getString(MidiDeviceInfo.PROPERTY_NAME);
             if (name == null || name.isEmpty()) name = props.getString(MidiDeviceInfo.PROPERTY_PRODUCT);
@@ -112,6 +136,10 @@ public class MidiPlugin extends Plugin {
         List<MidiOutputPort> list = ports.remove(id);
         if (list != null) for (MidiOutputPort p : list) {
             try { p.close(); } catch (IOException ignored) { }
+        }
+        MidiInputPort in = outs.remove(id);
+        if (in != null) {
+            try { in.close(); } catch (IOException ignored) { }
         }
         MidiDevice d = devices.remove(id);
         if (d != null) {

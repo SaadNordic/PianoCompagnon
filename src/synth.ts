@@ -2,6 +2,14 @@
 // (public/piano/, une note sur trois demi-tons, les autres sont transposées).
 // Tant que les échantillons ne sont pas chargés, un petit son synthétique sert de secours.
 
+import { midiInput } from './midiInput';
+import { pref } from './storage';
+
+/** « auto » : le piano numérique joue s'il est branché, sinon le téléphone. « device » : toujours le téléphone. */
+export type SoundOut = 'auto' | 'device';
+export const soundOut = () => pref<SoundOut>('soundOut', 'auto');
+const toPiano = () => soundOut() === 'auto' && midiInput.canPlay;
+
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 
@@ -62,6 +70,7 @@ const active = new Set<{ stop: (t: number) => void }>();
 export function playNote(midi: number, durationSec = 0.8, velocity = 80, when = 0): void {
   const c = ac();
   const t0 = Math.max(c.currentTime, when || c.currentTime);
+  if (toPiano()) { pianoNote(midi, durationSec, velocity, (t0 - c.currentTime) * 1000); return; }
   const s = nearestSample(midi);
   if (s === null) { void loadPiano(); synthNote(c, midi, durationSec, velocity, t0); return; }
   const src = c.createBufferSource();
@@ -83,10 +92,37 @@ export function playNote(midi: number, durationSec = 0.8, velocity = 80, when = 
 
 /** Coupe immédiatement tout ce qui joue (fin d'une écoute). */
 export function stopAll(): void {
+  pianoTimers.forEach(t => clearTimeout(t));
+  pianoTimers.clear();
+  if (pianoSounding.size) {
+    pianoSounding.forEach(m => midiInput.send([0x80, m, 0]));
+    pianoSounding.clear();
+    midiInput.send([0xb0, 123, 0]); // « toutes les notes off »
+  }
   if (!ctx) return;
   const t = ctx.currentTime;
   active.forEach(h => h.stop(t));
   active.clear();
+}
+
+// ---------- notes jouées par le piano numérique (sortie MIDI) ----------
+
+const pianoTimers = new Set<number>();
+const pianoSounding = new Set<number>();
+
+function later(fn: () => void, ms: number): void {
+  const t = window.setTimeout(() => { pianoTimers.delete(t); fn(); }, Math.max(0, ms));
+  pianoTimers.add(t);
+}
+
+function pianoNote(midi: number, durationSec: number, velocity: number, delayMs: number): void {
+  const vel = Math.max(1, Math.min(127, Math.round(velocity)));
+  later(() => {
+    if (pianoSounding.has(midi)) midiInput.send([0x80, midi, 0]); // note déjà tenue : on la relance
+    midiInput.send([0x90, midi, vel]);
+    pianoSounding.add(midi);
+    later(() => { midiInput.send([0x80, midi, 0]); pianoSounding.delete(midi); }, Math.max(0.08, durationSec) * 1000);
+  }, delayMs);
 }
 
 /** Son de secours, le temps que les échantillons arrivent. */

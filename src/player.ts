@@ -3,7 +3,7 @@
 import { OpenSheetMusicDisplay, type Note } from 'opensheetmusicdisplay';
 import { Keyboard, frName, type KeyMark } from './keyboard';
 import { midiInput, statusLabel } from './midiInput';
-import { playNote, now, unlockAudio } from './synth';
+import { playNote, now, unlockAudio, loadPiano, soundOut } from './synth';
 import { savePiece, pref, setPref, type Piece } from './storage';
 import { h, toast, openModal } from './ui';
 import { renderOriginals } from './originals';
@@ -126,6 +126,9 @@ export class Player {
       h('div', { class: 'menu-sep' }),
       h('label', {}, ["Vitesse d'écoute", select(this.speed, [[0.5, '50 %'], [0.75, '75 %'], [1, '100 %'], [1.25, '125 %']], v => {
         this.speed = Number(v); setPref('speed', this.speed);
+      })]),
+      h('label', {}, ['Son de l’appli', select(soundOut(), [['auto', 'Piano numérique s’il est branché'], ['device', 'Toujours cet appareil']], v => {
+        setPref('soundOut', v);
       })]),
       h('label', {}, ['Noms sur le clavier', select(this.kb.labels, [['c', 'Do seulement'], ['all', 'Toutes les notes'], ['none', 'Aucun']], v => {
         setPref('labels', v); this.kb.setLabels(v as 'none' | 'c' | 'all'); this.enterStep(this.idx, false);
@@ -485,13 +488,15 @@ export class Player {
 
   // ---------- écoute ----------
 
-  private listen(): void {
+  private async listen(): Promise<void> {
     unlockAudio();
     this.clearPending();
     this.closeOverlay();
     this.listening = true;
     this.listenBtn.textContent = '■';
     this.listenBtn.classList.add('on');
+    await loadPiano(); // le vrai son de piano dès la première note
+    if (!this.listening) return;
     const startIdx = this.finished ? 0 : this.idx;
     this.finished = false;
     const spw = this.secPerWhole() / this.speed;

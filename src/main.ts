@@ -5,6 +5,7 @@ import { seedRepertoire } from './repertoire';
 import { startAutoSync } from './sync';
 import { parsePcn, pcnToXml } from './codification';
 import { midiInput } from './midiInput';
+import { loadPiano, unlockAudio } from './synth';
 import { Player } from './player';
 import { createTrainer } from './learn';
 import { showLibrary } from './library';
@@ -52,6 +53,9 @@ void (async () => {
   startAutoSync();
   void midiInput.start();
   route();
+  // le son de piano se charge dès le démarrage ; le premier geste débloque l'audio (règle des navigateurs)
+  void loadPiano();
+  window.addEventListener('pointerdown', () => unlockAudio(), { once: true });
   // nouvelle version de l'APK ? (le navigateur, lui, se met à jour par le service worker)
   if (isNative()) void checkForUpdate();
 })();

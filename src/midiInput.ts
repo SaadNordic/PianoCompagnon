@@ -3,9 +3,10 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
 interface NativeMidi {
-  getDevices(): Promise<{ supported: boolean; names: string[] }>;
+  getDevices(): Promise<{ supported: boolean; names: string[]; canPlay?: boolean }>;
+  send(o: { data: number[] }): Promise<void>;
   addListener(ev: 'message', f: (d: { data: number[] }) => void): Promise<PluginListenerHandle>;
-  addListener(ev: 'devices', f: (d: { names: string[] }) => void): Promise<PluginListenerHandle>;
+  addListener(ev: 'devices', f: (d: { names: string[]; canPlay?: boolean }) => void): Promise<PluginListenerHandle>;
 }
 const nativeMidi = registerPlugin<NativeMidi>('Midi');
 
@@ -24,12 +25,15 @@ class MidiInput {
   private statusListeners = new Set<(s: MidiStatus) => void>();
   status: MidiStatus = { state: 'none' };
   readonly held = new Set<number>();
+  /** Vrai si un piano peut recevoir des notes (sortie MIDI). */
+  canPlay = false;
 
   async start(): Promise<void> {
     if (Capacitor.isNativePlatform()) {
       await nativeMidi.addListener('message', d => this.handle(d.data));
-      await nativeMidi.addListener('devices', d => this.setNames(d.names));
+      await nativeMidi.addListener('devices', d => { this.canPlay = !!d.canPlay; this.setNames(d.names); });
       const r = await nativeMidi.getDevices();
+      this.canPlay = !!r.canPlay;
       if (!r.supported) this.setStatus({ state: 'unsupported' });
       else this.setNames(r.names);
       return;
@@ -53,6 +57,7 @@ class MidiInput {
 
   private bind(): void {
     if (!this.access) return;
+    this.canPlay = [...this.access.outputs.values()].some(o => o.state === 'connected');
     const names: string[] = [];
     this.access.inputs.forEach(input => {
       if (input.state !== 'connected') return;
@@ -83,6 +88,13 @@ class MidiInput {
       if (cmd === 0x90 && vel > 0) this.noteOn(note, vel);
       else if (cmd === 0x80 || (cmd === 0x90 && vel === 0)) this.noteOff(note);
     }
+  }
+
+  /** Envoie des octets MIDI au piano (pour qu'il joue avec son vrai son). */
+  send(data: number[]): void {
+    if (!this.canPlay) return;
+    if (Capacitor.isNativePlatform()) { void nativeMidi.send({ data }).catch(() => { /* piano débranché */ }); return; }
+    this.access?.outputs.forEach(o => { try { o.send(data); } catch { /* ignoré */ } });
   }
 
   /** Aussi appelé par le clavier à l'écran. */

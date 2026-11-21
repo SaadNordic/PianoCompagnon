@@ -583,6 +583,19 @@ def catalogue_fetch(path: str, uid: int = Depends(current_user)):
 # Le dossier ../web contient la version web de l'appli (npm run build). Monté en dernier :
 # les routes /api/... ci-dessus restent prioritaires.
 WEB_DIR = HERE.parent / "web"
+
+
+@app.middleware("http")
+async def _cache_headers(request, call_next):
+    """La page d'accueil est toujours revérifiée (nouvelle version prise tout de suite) ;
+    les fichiers datés (assets) et les échantillons de piano restent en cache."""
+    resp = await call_next(request)
+    path = request.url.path
+    if path.startswith("/assets/") or path.startswith("/piano/"):
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif not path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 if WEB_DIR.is_dir():
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
 else:
