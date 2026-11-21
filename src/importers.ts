@@ -2,7 +2,7 @@ import { Midi } from '@tonejs/midi';
 import { unzipSync, strFromU8 } from 'fflate';
 import { notesToMusicXml, type RawNote, type Hand } from './musicxml';
 
-export interface Imported { title: string; xml: string; source: 'musicxml' | 'midi' }
+export interface Imported { title: string; xml: string; source: 'musicxml' | 'midi'; composer?: string }
 
 export class ImportError extends Error {}
 
@@ -20,6 +20,11 @@ function titleFromXml(xml: string, fallback: string): string {
     || doc.querySelector('movement-title')?.textContent?.trim()
     || doc.querySelector('credit-words')?.textContent?.trim();
   return t || fallback;
+}
+
+function composerFromXml(xml: string): string | undefined {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  return doc.querySelector('creator[type="composer"]')?.textContent?.trim() || undefined;
 }
 
 function checkXml(xml: string): void {
@@ -80,12 +85,12 @@ export async function importFile(file: File): Promise<Imported> {
   if (isZip || name.endsWith('.mxl')) {
     const xml = fromMxl(buf);
     checkXml(xml);
-    return { title: titleFromXml(xml, title), xml, source: 'musicxml' };
+    return { title: titleFromXml(xml, title), xml, source: 'musicxml', composer: composerFromXml(xml) };
   }
   if (/\.(xml|musicxml)$/.test(name) || buf[0] === 0x3c || (buf[0] === 0xef && buf[3] === 0x3c)) {
     const xml = new TextDecoder().decode(buf);
     checkXml(xml);
-    return { title: titleFromXml(xml, title), xml, source: 'musicxml' };
+    return { title: titleFromXml(xml, title), xml, source: 'musicxml', composer: composerFromXml(xml) };
   }
   if (name.endsWith('.pdf') || file.type.startsWith('image/') || file.type.startsWith('audio/')) {
     throw new ImportError('PDF, photo et audio arrivent dans la prochaine version. Pour l\'instant : MusicXML (.xml, .musicxml, .mxl) ou MIDI (.mid).');

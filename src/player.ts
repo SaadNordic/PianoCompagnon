@@ -382,7 +382,9 @@ export class Player {
     const acc = total ? Math.round((this.hits / total) * 100) : 100;
     const best = this.piece.bestRun;
     const isBest = !best || this.wrong < best.wrong || (this.wrong === best.wrong && secs < best.seconds);
-    if (isBest && this.hits > 0) { this.piece.bestRun = { wrong: this.wrong, seconds: secs }; void savePiece(this.piece); }
+    this.piece.playCount = (this.piece.playCount ?? 0) + 1;
+    if (isBest && this.hits > 0) this.piece.bestRun = { wrong: this.wrong, seconds: secs };
+    void savePiece(this.piece);
     const mmss = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
     this.overlay = h('div', { class: 'overlay' }, [
       h('div', { class: 'card done' }, [

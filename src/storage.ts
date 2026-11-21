@@ -8,6 +8,14 @@ export interface Piece {
   addedAt: number;
   lastPlayedAt?: number;
   bestRun?: { wrong: number; seconds: number };
+  // classement
+  composer?: string;
+  category?: string;
+  tags?: string[];
+  favorite?: boolean;
+  difficulty?: number; // 1 à 5
+  note?: string;
+  playCount?: number;
 }
 
 const PREFIX = 'piece:';
