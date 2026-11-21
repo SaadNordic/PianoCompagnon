@@ -105,6 +105,39 @@ h2 { font-size: 1.05rem; color: var(--muted); font-weight: 600; margin: 26px 0 1
 .key.wrong { animation: wrong 0.45s; }
 @keyframes wrong { 0%, 60% { background: var(--bad); } }
 
+/* ---------- apprendre ---------- */
+.learn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.learn-card { text-align: left; white-space: normal; background: var(--panel); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 4px; }
+.lc-icon { font-size: 1.8rem; }
+.lc-title { font-weight: 650; font-size: 1.02rem; }
+.lc-desc { color: var(--muted); font-size: 0.85rem; }
+.lc-stats { color: var(--accent); font-size: 0.8rem; margin-top: 4px; }
+.trainer { display: flex; flex-direction: column; height: 100%; }
+.trainer .bar select { max-width: 44vw; }
+.tr-score { display: flex; gap: 8px; font-size: 0.9rem; white-space: nowrap; }
+.tr-score .g { color: #8be0b0; } .tr-score .b { color: #ff9a9d; } .tr-score .s { color: var(--accent); }
+.tr-body {
+  flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 12px; text-align: center; scrollbar-gutter: stable;
+}
+.prompt { color: var(--muted); font-size: 0.95rem; }
+.stage { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.mini-staff { width: min(46vw, 190px); background: #fffdf8; border-radius: 12px; padding: 4px 8px; overflow: hidden; }
+.big-name { font-size: clamp(1.6rem, 6vw, 2.6rem); font-weight: 750; letter-spacing: -0.01em; }
+.sub-name { color: var(--accent); font-size: 1.1rem; font-weight: 600; min-height: 1.4em; }
+.spelled { color: #cdd2dd; min-height: 1.4em; font-size: 1.05rem; }
+.seq { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.seq span { min-width: 44px; padding: 6px 8px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line); font-weight: 600; }
+.seq span.done { background: #164a2e; border-color: var(--ok); color: #bff2d6; }
+.seq span.cur { border-color: var(--accent); }
+.feedback { min-height: 1.5em; font-weight: 600; font-size: 1.05rem; }
+.feedback.ok { color: #8be0b0; } .feedback.bad { color: #ff9a9d; } .feedback.hint { color: var(--accent); }
+.tr-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+@media (max-height: 500px) {
+  .tr-body { gap: 4px; padding: 6px; justify-content: flex-start; }
+  .mini-staff { width: min(30vw, 130px); }
+}
+
 /* ---------- divers ---------- */
 .overlay { position: absolute; inset: 0; background: rgba(8, 9, 12, 0.6); display: flex; align-items: center; justify-content: center; z-index: 10; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 26px; max-width: 92vw; text-align: center; }

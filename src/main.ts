@@ -7,11 +7,12 @@ import { listPieces, getPiece, savePiece, deletePiece, newId, pref, setPref, typ
 import { midiInput, statusLabel, type MidiStatus } from './midiInput';
 import { Player } from './player';
 import { unlockAudio } from './synth';
+import { EXERCISES, createTrainer, getStats } from './learn';
 
 registerSW({ immediate: true });
 
 const app = document.getElementById('app')!;
-let player: Player | null = null;
+let player: { destroy(): void } | null = null;
 
 async function seedDemo(): Promise<void> {
   if (pref('seeded', false)) return;
@@ -23,16 +24,27 @@ function route(): void {
   player?.destroy();
   player = null;
   const m = location.hash.match(/^#\/jouer\/(.+)$/);
+  const l = location.hash.match(/^#\/apprendre\/(.+)$/);
   if (m) void openPlayer(decodeURIComponent(m[1]));
+  else if (l) openTrainer(l[1]);
   else void showLibrary();
+}
+
+function openTrainer(id: string): void {
+  const t = createTrainer(id, () => { location.hash = '#/'; });
+  if (!t) { location.hash = '#/'; return; }
+  player = t;
+  app.replaceChildren(t.el);
+  t.mount();
 }
 
 async function openPlayer(id: string): Promise<void> {
   const piece = await getPiece(id);
   if (!piece) { location.hash = '#/'; return; }
-  player = new Player(piece, () => { location.hash = '#/'; });
-  app.replaceChildren(player.el);
-  await player.mount();
+  const p = new Player(piece, () => { location.hash = '#/'; });
+  player = p;
+  app.replaceChildren(p.el);
+  await p.mount();
 }
 
 function midiChip(): HTMLElement {
@@ -100,6 +112,16 @@ async function showLibrary(): Promise<void> {
     ]),
     h('h2', {}, 'Mes partitions'),
     list,
+    h('h2', {}, 'Apprendre'),
+    h('div', { class: 'learn-grid' }, EXERCISES.map(e => {
+      const st = getStats(e.id);
+      return h('button', { class: 'learn-card', onclick: () => { unlockAudio(); location.hash = `#/apprendre/${e.id}`; } }, [
+        h('div', { class: 'lc-icon' }, e.icon),
+        h('div', { class: 'lc-title' }, e.title),
+        h('div', { class: 'lc-desc' }, e.desc),
+        st.total ? h('div', { class: 'lc-stats' }, `${st.total} réussites · meilleure série ${st.best}`) : null
+      ]);
+    })),
     h('details', { class: 'help' }, [
       h('summary', {}, 'Brancher le piano et trouver des partitions'),
       h('div', { html: `
