@@ -1,3 +1,4 @@
+// Usage : npx -p sharp node scripts/android-icons.cjs  (sharp n'est pas une dependance du projet)
 // Génère les icônes et écrans de démarrage Android à partir de public/icon.svg
 const sharp = require('sharp');
 const fs = require('fs');
