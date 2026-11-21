@@ -1,7 +1,8 @@
 import './styles.css';
 import { registerSW } from 'virtual:pwa-register';
-import { demoPiece } from './musicxml';
-import { getPiece, savePiece, pref, setPref } from './storage';
+import { getPiece, savePiece, deletePiece, pref, setPref } from './storage';
+import { REPERTOIRE } from './repertoire';
+import { parsePcn, pcnToXml } from './codification';
 import { midiInput } from './midiInput';
 import { Player } from './player';
 import { createTrainer } from './learn';
@@ -12,10 +13,19 @@ registerSW({ immediate: true });
 const app = document.getElementById('app')!;
 let player: { destroy(): void } | null = null;
 
-async function seedDemo(): Promise<void> {
-  if (pref('seeded', false)) return;
-  await savePiece({ id: 'demo-ode', title: 'Ode à la joie (exemple)', xml: demoPiece(), source: 'demo', addedAt: Date.now(), composer: 'Beethoven', category: 'Exemples', difficulty: 1 });
-  setPref('seeded', true);
+/** Répertoire de départ (domaine public), ajouté une fois ; remplace l'ancien morceau d'exemple. */
+async function seedRepertoire(): Promise<void> {
+  if (pref('seeded.rep1', false)) return;
+  await deletePiece('demo-ode');
+  let t = Date.now();
+  for (const r of REPERTOIRE) {
+    if (await getPiece(r.id)) continue;
+    await savePiece({
+      id: r.id, title: r.title, composer: r.composer, difficulty: r.difficulty, tags: r.tags, category: 'Classique',
+      code: r.code, xml: pcnToXml(parsePcn(r.code), r.title), source: 'pcn', addedAt: t--
+    });
+  }
+  setPref('seeded.rep1', true);
 }
 
 function route(): void {
@@ -39,6 +49,8 @@ function openTrainer(id: string): void {
 async function openPlayer(id: string): Promise<void> {
   const piece = await getPiece(id);
   if (!piece) { location.hash = '#/'; return; }
+  // la codification PCN fait foi : la partition affichée en est toujours tirée
+  if (piece.code) piece.xml = pcnToXml(parsePcn(piece.code), piece.title);
   const p = new Player(piece, () => { location.hash = '#/'; });
   player = p;
   app.replaceChildren(p.el);
@@ -47,7 +59,7 @@ async function openPlayer(id: string): Promise<void> {
 
 window.addEventListener('hashchange', route);
 void (async () => {
-  await seedDemo();
+  await seedRepertoire();
   void midiInput.start();
   route();
 })();

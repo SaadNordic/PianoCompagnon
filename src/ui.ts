@@ -29,7 +29,7 @@ export function toast(msg: string, ms = 1600): void {
 }
 
 /** Fenêtre modale à taille fixe : seul le corps défile. Renvoie la fonction de fermeture. */
-export function openModal(title: string, body: HTMLElement, footer: HTMLElement[], onClose?: () => void): () => void {
+export function openModal(title: string, body: HTMLElement, footer: HTMLElement[], onClose?: () => void, flush = false): () => void {
   let closed = false;
   const close = () => {
     if (closed) return;
@@ -42,11 +42,30 @@ export function openModal(title: string, body: HTMLElement, footer: HTMLElement[
   const overlay = h('div', { class: 'modal-overlay', onclick: (e: Event) => { if (e.target === overlay) close(); } }, [
     h('div', { class: 'modal', role: 'dialog' }, [
       h('div', { class: 'modal-head' }, [h('div', { class: 'modal-title' }, title), h('button', { class: 'icon', onclick: close, title: 'Fermer' }, '✕')]),
-      h('div', { class: 'modal-body' }, body),
+      h('div', { class: 'modal-body' + (flush ? ' flush' : '') }, body),
       h('div', { class: 'modal-foot' }, footer)
     ])
   ]);
   document.addEventListener('keydown', onKey);
   document.body.appendChild(overlay);
   return close;
+}
+
+export interface TabDef { label: string; render: () => HTMLElement }
+
+/** Onglets : barre fixe, seul le contenu défile ; chaque onglet garde son état. */
+export function tabs(defs: TabDef[], start = 0): { el: HTMLElement; select: (i: number) => void } {
+  const bar = h('div', { class: 'tabbar' });
+  const pane = h('div', { class: 'tabpane' });
+  const cache = new Map<number, HTMLElement>();
+  const buttons = defs.map((d, i) => h('button', { class: 'tab', onclick: () => select(i) }, d.label));
+  bar.append(...buttons);
+  const select = (i: number) => {
+    buttons.forEach((b, j) => b.classList.toggle('on', i === j));
+    if (!cache.has(i)) cache.set(i, defs[i].render());
+    pane.replaceChildren(cache.get(i)!);
+    pane.scrollTop = 0;
+  };
+  select(Math.min(start, defs.length - 1));
+  return { el: h('div', { class: 'tabs' }, [bar, pane]), select };
 }

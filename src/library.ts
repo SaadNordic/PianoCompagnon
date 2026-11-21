@@ -1,12 +1,14 @@
 // Écran d'accueil : bibliothèque de partitions (recherche, classement, tri) + modules Apprendre.
 
-import { h, toast, openModal } from './ui';
+import { h, toast, openModal, tabs } from './ui';
 import { importFile, ImportError } from './importers';
 import { listPieces, savePiece, deletePiece, newId, pref, setPref, type Piece } from './storage';
 import { midiInput, statusLabel } from './midiInput';
 import { unlockAudio } from './synth';
 import { EXERCISES, getStats } from './learn';
 import { isScanFile, scanScore, getApiKey, setApiKey, ScanError, type ScanProgress } from './scan';
+import { parsePcn, pcnToXml, normalizePcn, PCN_HELP } from './codification';
+import { saveOriginals, renderOriginals } from './originals';
 
 type SortKey = 'recent' | 'added' | 'title' | 'composer' | 'difficulty' | 'plays';
 const SORTS: [SortKey, string][] = [
@@ -60,7 +62,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
         const imp = await importFile(f);
         const p: Piece = {
           id: newId(), title: imp.title, xml: imp.xml, source: imp.source, addedAt: Date.now(),
-          composer: imp.composer, category: filter !== ALL && filter !== FAV && filter !== NONE ? filter : undefined
+          composer: imp.composer, code: imp.code, category: filter !== ALL && filter !== FAV && filter !== NONE ? filter : undefined
         };
         await savePiece(p);
         added.push(p);
@@ -102,10 +104,11 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       .then(async r => {
         clearInterval(timer);
         const p: Piece = {
-          id: newId(), title: r.title, composer: r.composer, xml: r.xml, source: 'scan', addedAt: Date.now(),
+          id: newId(), title: r.title, composer: r.composer, xml: r.xml, code: r.code, hasOriginal: true, source: 'scan', addedAt: Date.now(),
           category: filter !== ALL && filter !== FAV && filter !== NONE ? filter : undefined,
           note: r.warning
         };
+        await saveOriginals(p.id, scans);
         await savePiece(p);
         close();
         await reload();
@@ -161,7 +164,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     const note = h('textarea', { rows: 3, placeholder: 'Doigtés, passages à travailler…' }) as HTMLTextAreaElement;
     note.value = p.note ?? '';
     const composers = [...new Set(pieces.map(x => x.composer).filter(Boolean) as string[])];
-    const body = h('div', { class: 'form' }, [
+    const form = h('div', { class: 'form' }, [
       field('Titre', title), field('Compositeur', composer), field('Catégorie', category),
       field('Étiquettes (séparées par des virgules)', tags), field('Difficulté', difficulty),
       h('label', { class: 'check' }, [fav, h('span', {}, 'Favori')]),
@@ -174,7 +177,45 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
         p.bestRun ? ` · record : ${p.bestRun.wrong} faute${p.bestRun.wrong > 1 ? 's' : ''} en ${fmtTime(p.bestRun.seconds)}` : ''
       ].join(''))
     ]);
+    // codification PCN (modifiable)
+    const codeArea = h('textarea', { class: 'pcn', spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', wrap: 'off' }) as HTMLTextAreaElement;
+    codeArea.value = p.code ?? '';
+    const codeStatus = h('div', { class: 'meta' });
+    const checkCode = () => {
+      const r = parsePcn(codeArea.value);
+      codeStatus.className = 'meta ' + (r.measures && !r.problems.length ? 'ok' : 'bad');
+      codeStatus.textContent = !r.measures ? 'Aucune mesure reconnue.'
+        : `${r.measures} mesures, ${r.notes.length} notes.` + (r.problems.length ? ` À vérifier : ${r.problems.slice(0, 6).join(' ; ')}${r.problems.length > 6 ? '…' : ''}` : ' Tout est cohérent.');
+      return r;
+    };
+    const codeTab = () => {
+      checkCode();
+      codeArea.addEventListener('input', () => checkCode());
+      return h('div', { class: 'pcn-tab' }, [
+        h('p', { class: 'meta' }, 'Codification de la partition (format PCN) : c\'est ce qui est enregistré dans la base. Corrigez une mesure ici, la partition est régénérée à l\'enregistrement.'),
+        codeArea, codeStatus,
+        h('details', { class: 'pcn-help' }, [h('summary', {}, 'Comment écrire'), h('pre', {}, PCN_HELP)])
+      ]);
+    };
+    const origTab = () => {
+      const box = h('div', { class: 'orig-box' });
+      void renderOriginals(box, p.id);
+      return box;
+    };
+    const tabDefs = [{ label: 'Fiche', render: () => form }];
+    if (p.code) tabDefs.push({ label: 'Codification', render: codeTab });
+    if (p.hasOriginal) tabDefs.push({ label: 'Original', render: origTab });
+    const t = tabs(tabDefs);
+    const body = tabDefs.length > 1 ? t.el : form;
+
     const save = async () => {
+      if (p.code !== undefined) {
+        const parsed = checkCode();
+        if (!parsed.measures) { t.select(1); toast('Codification illisible : corrigez-la avant d\'enregistrer.', 4000); return false; }
+        const newTitle = title.value.trim() || p.title;
+        p.code = normalizePcn(codeArea.value, newTitle, composer.value.trim() || undefined);
+        p.xml = pcnToXml(parsePcn(p.code), newTitle);
+      }
       p.title = title.value.trim() || p.title;
       p.composer = composer.value.trim() || undefined;
       p.category = category.value.trim() || undefined;
@@ -185,6 +226,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       await savePiece(p);
       close();
       await reload();
+      return true;
     };
     const close = openModal(isNew ? 'Nouvelle partition — classer' : 'Fiche de la partition', body, [
       ...(isNew ? [] : [h('button', { class: 'danger', onclick: async () => {
@@ -195,8 +237,8 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       } }, 'Supprimer')]),
       h('span', { class: 'spacer' }),
       h('button', { onclick: () => void save() }, 'Enregistrer'),
-      h('button', { class: 'primary', onclick: async () => { await save(); open(p); } }, 'Jouer')
-    ]);
+      h('button', { class: 'primary', onclick: async () => { if (await save()) open(p); } }, 'Jouer')
+    ], undefined, tabDefs.length > 1);
     if (isNew) setTimeout(() => category.focus(), 50);
   };
 
@@ -254,7 +296,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
           p.difficulty ? h('span', { class: 'diff', title: `Difficulté ${p.difficulty}/5` }, stars(p.difficulty)) : null,
           p.bestRun ? h('span', { class: 'rec' }, `record ${p.bestRun.wrong} faute${p.bestRun.wrong > 1 ? 's' : ''} · ${fmtTime(p.bestRun.seconds)}`) : null,
           !p.composer && !p.category && !p.tags?.length && !p.bestRun
-            ? h('span', {}, p.source === 'midi' ? 'MIDI' : p.source === 'demo' ? 'Exemple' : p.source === 'scan' ? 'PDF / photo' : 'MusicXML') : null
+            ? h('span', {}, p.source === 'midi' ? 'MIDI' : p.source === 'demo' ? 'Exemple' : p.source === 'scan' ? 'PDF / photo' : p.source === 'pcn' ? 'Codification PCN' : 'MusicXML') : null
         ])
       ]),
       h('button', { class: 'icon', title: 'Fiche, classement', onclick: () => editPiece(p) }, '✎')
@@ -309,7 +351,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       h('summary', {}, 'Brancher le piano et trouver des partitions'),
       h('div', { html: `
         <p><b>Branchement :</b> câble USB-C (téléphone) vers USB-B (prise carrée à l'arrière du piano). Le voyant en haut passe au vert avec le nom du piano.</p>
-        <p><b>Formats acceptés :</b> PDF et photos (lus par Claude : renseignez votre clé dans ⚙), MusicXML (<code>.musicxml</code>, <code>.xml</code>, <code>.mxl</code>) et MIDI (<code>.mid</code>). Plusieurs photos importées ensemble = les pages d'un même morceau. Une partition lue par photo peut contenir des erreurs : écoutez-la avec ▶ pour vérifier.</p>
+        <p><b>Formats acceptés :</b> PDF et photos (lus par Claude : renseignez votre clé dans ⚙), codification PCN (<code>.pcn</code>), MusicXML (<code>.musicxml</code>, <code>.xml</code>, <code>.mxl</code>) et MIDI (<code>.mid</code>). Plusieurs photos importées ensemble = les pages d'un même morceau. Une partition lue par photo peut contenir des erreurs : écoutez-la avec ▶ pour vérifier.</p>
         <p><b>Où trouver des partitions :</b> MuseScore (exporter en MusicXML), IMSLP / Mutopia (domaine public), ou tout fichier MIDI.</p>
         <p><b>Classer :</b> touchez ✎ pour renseigner compositeur, catégorie, étiquettes, difficulté. ☆ met en favori.</p>
         <p><b>Pendant le jeu :</b> la note attendue s'allume sur le clavier (bleu = main droite, orange = main gauche). Touchez une mesure pour y aller, ⟲ pour répéter un passage. En « MD » ou « MG », l'appli joue l'autre main pour vous.</p>` })

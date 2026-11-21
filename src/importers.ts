@@ -1,8 +1,9 @@
 import { Midi } from '@tonejs/midi';
 import { unzipSync, strFromU8 } from 'fflate';
 import { notesToMusicXml, type RawNote, type Hand } from './musicxml';
+import { looksLikePcn, parsePcn, pcnToXml, normalizePcn } from './codification';
 
-export interface Imported { title: string; xml: string; source: 'musicxml' | 'midi'; composer?: string }
+export interface Imported { title: string; xml: string; source: 'musicxml' | 'midi' | 'pcn'; composer?: string; code?: string }
 
 export class ImportError extends Error {}
 
@@ -79,6 +80,13 @@ export async function importFile(file: File): Promise<Imported> {
   const isZip = buf[0] === 0x50 && buf[1] === 0x4b; // "PK"
   const isMidi = buf[0] === 0x4d && buf[1] === 0x54 && buf[2] === 0x68 && buf[3] === 0x64; // "MThd"
 
+  if (name.endsWith('.pcn') || (!isZip && !isMidi && buf[0] !== 0x3c && looksLikePcn(new TextDecoder().decode(buf.slice(0, 4000))))) {
+    const text = new TextDecoder().decode(buf);
+    const parsed = parsePcn(text);
+    if (!parsed.measures) throw new ImportError('Codification PCN vide ou illisible.');
+    const t = parsed.meta.title || title;
+    return { title: t, xml: pcnToXml(parsed, t), source: 'pcn', composer: parsed.meta.composer, code: normalizePcn(text, t, parsed.meta.composer) };
+  }
   if (isMidi || /\.midi?$/.test(name)) {
     return { title, xml: fromMidi(buf, title), source: 'midi' };
   }

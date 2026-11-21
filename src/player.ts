@@ -5,7 +5,8 @@ import { Keyboard, frName, type KeyMark } from './keyboard';
 import { midiInput, statusLabel } from './midiInput';
 import { playNote, now, unlockAudio } from './synth';
 import { savePiece, pref, setPref, type Piece } from './storage';
-import { h, toast } from './ui';
+import { h, toast, openModal } from './ui';
+import { renderOriginals } from './originals';
 
 type HandSel = 'both' | 'R' | 'L';
 type Part = 'R' | 'L' | 'acc'; // acc = partie jouée par l'appli (autre instrument)
@@ -82,6 +83,12 @@ export class Player {
       h('button', { class: 'icon', title: 'Recommencer au début', onclick: () => this.restart() }, '⏮'),
       this.listenBtn,
       this.loopBtn,
+      this.piece.hasOriginal ? h('button', { class: 'icon', title: 'Voir la partition originale (photo / PDF)', onclick: () => {
+        const box = h('div', { class: 'orig-box' });
+        openModal('Partition originale', box, [h('span', { class: 'spacer' }), h('button', { onclick: () => closeOrig() }, 'Fermer')]);
+        const closeOrig = () => document.querySelector('.modal-overlay')?.remove();
+        void renderOriginals(box, this.piece.id);
+      } }, '📄') : null,
       h('button', { class: 'icon', title: 'Réglages', onclick: () => this.settingsEl.classList.toggle('open') }, '⚙'),
       this.midiDot
     ]);

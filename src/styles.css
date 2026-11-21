@@ -74,6 +74,20 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 .piece-sub .rec { color: var(--muted); font-size: 0.8rem; }
 button.danger { color: #ffb3b5; border-color: #6b2b2e; }
 
+/* onglets dans une modale : barre fixe, seul le contenu défile */
+.modal-body.flush { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tabbar { flex-shrink: 0; display: flex; gap: 4px; padding: 8px 12px 0; border-bottom: 1px solid var(--line); }
+.tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 8px 12px; }
+.tab.on { color: var(--text); border-bottom-color: var(--accent); background: none; font-weight: 600; }
+.tabpane { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 14px 16px; }
+.pcn-tab { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadia Mono', Consolas, monospace; white-space: pre; overflow: auto; }
+.meta.ok { color: #8be0b0; } .meta.bad { color: #ff9a9d; }
+.pcn-help pre { white-space: pre-wrap; font-size: 0.8rem; color: #cdd2dd; background: var(--panel2); padding: 10px; border-radius: 8px; }
+.orig-box { display: flex; flex-direction: column; gap: 10px; }
+.orig-page { width: 100%; height: auto; background: #fff; border-radius: 6px; }
+
 /* reconnaissance */
 .cam-btn { font-size: 1.4rem; padding: 0 18px; }
 .scan-body { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding-top: 18px; }

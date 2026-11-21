@@ -3,7 +3,7 @@
 // en MusicXML avec le même convertisseur que pour les fichiers MIDI.
 
 import Anthropic from '@anthropic-ai/sdk';
-import { notesToMusicXml, type RawNote, type Hand } from './musicxml';
+import { parsePcn, pcnToXml, normalizePcn } from './codification';
 import { pref, setPref } from './storage';
 
 export const getApiKey = () => pref<string>('apiKey', '');
@@ -18,6 +18,7 @@ export class ScanError extends Error {}
 export interface ScanResult {
   title: string;
   composer?: string;
+  code: string; // codification PCN
   xml: string;
   measures: number;
   warning?: string;
@@ -90,79 +91,6 @@ async function toBlocks(files: File[]): Promise<Anthropic.Beta.BetaContentBlockP
   return blocks;
 }
 
-// ---------- lecture de la transcription ----------
-
-const PC: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
-
-function parsePitch(s: string): number | null {
-  const m = s.match(/^([A-Ga-g])(##|#|bb|b|n)?(-?\d)$/);
-  if (!m) return null;
-  const alter = { '##': 2, '#': 1, bb: -2, b: -1, n: 0 }[m[2] ?? 'n'] ?? 0;
-  return (Number(m[3]) + 1) * 12 + PC[m[1].toUpperCase()] + alter;
-}
-
-function parseDur(s: string): number {
-  if (s.includes('/')) {
-    const [a, b] = s.split('/').map(Number);
-    return b ? a / b : NaN;
-  }
-  return Number(s.replace(',', '.'));
-}
-
-export function parseTranscription(text: string): { notes: RawNote[]; meta: { title: string; composer?: string; beats: number; beatType: number; fifths: number; bpm: number }; measures: number; problems: number } {
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const header = (k: string) => lines.find(l => l.toUpperCase().startsWith(k + ':'))?.slice(k.length + 1).trim() ?? '';
-  const [beats, beatType] = (header('TIME').match(/(\d+)\s*\/\s*(\d+)/)?.slice(1).map(Number) ?? [4, 4]) as [number, number];
-  const fifths = Math.max(-7, Math.min(7, parseInt(header('KEY'), 10) || 0));
-  const bpm = Math.min(240, Math.max(30, parseInt(header('TEMPO'), 10) || 90));
-  const measureLen = (beats * 4) / beatType;
-  const notes: RawNote[] = [];
-  let measures = 0;
-  let problems = 0;
-  // liaisons en attente : par main et par voix, hauteur -> note à prolonger
-  const ties = new Map<string, Map<number, RawNote>>();
-
-  for (const line of lines) {
-    if (!/^M\d+\s*\|/i.test(line)) continue;
-    const start = measures * measureLen;
-    measures++;
-    for (const part of line.split('|').slice(1)) {
-      const hm = part.trim().match(/^(RH|LH)\s*:\s*(.*)$/i);
-      if (!hm) continue;
-      const hand: Hand = hm[1].toUpperCase() === 'RH' ? 'R' : 'L';
-      hm[2].split('&').forEach((voice, vi) => {
-        const key = `${hand}${vi}`;
-        const pending = ties.get(key) ?? new Map<number, RawNote>();
-        const next = new Map<number, RawNote>();
-        let t = start;
-        for (const tok of voice.trim().split(/\s+/).filter(Boolean)) {
-          const em = tok.match(/^([^:]+):([^~]+)(~?)$/);
-          const dur = em ? parseDur(em[2]) : NaN;
-          if (!em || !(dur > 0)) { problems++; continue; }
-          const tied = em[3] === '~';
-          if (em[1].toLowerCase() !== 'r') {
-            for (const ps of em[1].split('+')) {
-              const midi = parsePitch(ps);
-              if (midi === null) { problems++; continue; }
-              const prev = pending.get(midi);
-              let n: RawNote;
-              if (prev && Math.abs(prev.start + prev.dur - t) < 0.01) { prev.dur += dur; n = prev; }
-              else { n = { midi, start: t, dur, hand }; notes.push(n); }
-              if (tied) next.set(midi, n);
-            }
-          }
-          pending.clear();
-          if (tied) next.forEach((v, k) => pending.set(k, v));
-          next.clear();
-          t += dur;
-        }
-        ties.set(key, pending);
-      });
-    }
-  }
-  return { notes, meta: { title: header('TITLE'), composer: header('COMPOSER') || undefined, beats, beatType, fifths, bpm }, measures, problems };
-}
-
 // ---------- appel à Claude ----------
 
 export async function scanScore(files: File[], fallbackTitle: string, onProgress: (p: ScanProgress) => void, signal: AbortSignal): Promise<ScanResult> {
@@ -202,14 +130,15 @@ export async function scanScore(files: File[], fallbackTitle: string, onProgress
   }
   if (msg.stop_reason === 'refusal') throw new ScanError('Claude a refusé de lire ce document.');
   const finalText = msg.content.filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === 'text').map(b => b.text).join('');
-  const parsed = parseTranscription(finalText || text);
+  const parsed = parsePcn(finalText || text);
   if (!parsed.measures || !parsed.notes.length) {
     throw new ScanError('Aucune mesure reconnue. La photo est-elle nette et bien cadrée ?');
   }
   const title = parsed.meta.title || fallbackTitle;
-  const xml = notesToMusicXml(parsed.notes, { ...parsed.meta, title });
+  const xml = pcnToXml(parsed, title);
+  const code = normalizePcn(finalText || text, title, parsed.meta.composer);
   const warnings: string[] = [];
-  if (msg.stop_reason === 'max_tokens') warnings.push('La partition est très longue : la fin n\'a pas pu être transcrite.');
-  if (parsed.problems) warnings.push(`${parsed.problems} élément${parsed.problems > 1 ? 's' : ''} illisible${parsed.problems > 1 ? 's' : ''} ignoré${parsed.problems > 1 ? 's' : ''}.`);
-  return { title, composer: parsed.meta.composer, xml, measures: parsed.measures, warning: warnings.join(' ') || undefined };
+  if (msg.stop_reason === 'max_tokens') warnings.push("La partition est très longue : la fin n'a pas pu être transcrite.");
+  if (parsed.problems.length) warnings.push(`À vérifier : ${parsed.problems.slice(0, 5).join(' ; ')}${parsed.problems.length > 5 ? '…' : ''}`);
+  return { title, composer: parsed.meta.composer, code, xml, measures: parsed.measures, warning: warnings.join(' ') || undefined };
 }

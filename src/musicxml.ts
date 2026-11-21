@@ -8,6 +8,7 @@ export interface RawNote {
   start: number; // en noires (temps)
   dur: number; // en noires
   hand?: Hand;
+  voice?: number; // 0 = voix principale ; 1, 2… = voix supplémentaires de la même main
 }
 
 export interface ScoreMeta {
@@ -16,6 +17,7 @@ export interface ScoreMeta {
   beatType?: number;
   bpm?: number;
   fifths?: number; // armure : nb de dièses (>0) ou bémols (<0)
+  exact?: boolean; // durées exactes (codification) : pas de recalage « jeu humain »
 }
 
 const DIV = 4; // divisions par noire : grille à la double croche
@@ -42,7 +44,7 @@ export function splitHands(notes: RawNote[]): RawNote[] {
   return notes.map(n => (n.hand ? n : { ...n, hand: n.midi < 60 ? 'L' : 'R' }));
 }
 
-function buildEvents(notes: RawNote[]): Ev[] {
+function buildEvents(notes: RawNote[], exact = false): Ev[] {
   // regroupe par attaque quantifiée, puis comble les trous avec des silences
   const byOnset = new Map<number, { pitches: Set<number>; end: number }>();
   for (const n of notes) {
@@ -62,9 +64,9 @@ function buildEvents(notes: RawNote[]): Ev[] {
     const next = i + 1 < onsets.length ? onsets[i + 1] : Infinity;
     let end = Math.min(g.end, next);
     // jeu « humain » : une note un peu courte est prolongée jusqu'à la suivante (ou jusqu'au temps)
-    const tolerance = Math.max(1, Math.round((end - s) * 0.25));
-    if (next !== Infinity && next - end > 0 && next - end <= tolerance) end = next;
-    else if (next === Infinity) {
+    const tolerance = exact ? 0 : Math.max(1, Math.round((end - s) * 0.25));
+    if (tolerance && next !== Infinity && next - end > 0 && next - end <= tolerance) end = next;
+    else if (tolerance && next === Infinity) {
       const beat = Math.ceil(end / DIV) * DIV;
       if (beat - end <= tolerance) end = beat;
     }
@@ -92,25 +94,32 @@ export function notesToMusicXml(input: RawNote[], meta: ScoreMeta): string {
   const names = fifths < 0 ? FLAT_NAMES : SHARP_NAMES;
   const L = Math.round((beats * 4 * DIV) / beatType); // longueur de mesure en doubles croches
   const notes = splitHands(input);
-  const staffEvents: Record<Hand, Ev[]> = {
-    R: buildEvents(notes.filter(n => n.hand === 'R')),
-    L: buildEvents(notes.filter(n => n.hand === 'L'))
-  };
-  const lastEnd = Math.max(1, ...Object.values(staffEvents).flat().map(e => e.start + e.len));
+  // une « piste » par main et par voix
+  interface Lane { si: number; voice: number; events: Ev[] }
+  const lanes: Lane[] = [];
+  (['R', 'L'] as Hand[]).forEach((hand, si) => {
+    const handNotes = notes.filter(n => n.hand === hand);
+    const voices = [...new Set(handNotes.map(n => n.voice ?? 0))].sort((x, y) => x - y);
+    if (!voices.length) voices.push(0);
+    voices.forEach(v => lanes.push({ si, voice: v, events: buildEvents(handNotes.filter(n => (n.voice ?? 0) === v), meta.exact) }));
+  });
+  const lastEnd = Math.max(1, ...lanes.flatMap(l => l.events).map(e => e.start + e.len));
   const nMeasures = Math.ceil(lastEnd / L);
   const total = nMeasures * L;
-  for (const h of ['R', 'L'] as Hand[]) {
-    const evs = staffEvents[h];
+  for (const lane of lanes) {
+    const evs = lane.events;
     const end = evs.length ? evs[evs.length - 1].start + evs[evs.length - 1].len : 0;
     if (end < total) evs.push({ start: end, len: total - end, pitches: null });
   }
 
-  // découpe aux barres de mesure -> XML par mesure et par portée
-  const out: string[][][] = Array.from({ length: nMeasures }, () => [[], []]);
-  (['R', 'L'] as Hand[]).forEach((h, si) => {
-    const staff = si + 1;
-    const voice = si === 0 ? 1 : 5;
-    for (const ev of staffEvents[h]) {
+  // découpe aux barres de mesure -> XML par mesure et par piste
+  const out: string[][][] = Array.from({ length: nMeasures }, () => lanes.map(() => []));
+  lanes.forEach((lane, li) => {
+    const staff = lane.si + 1;
+    const rank = lanes.filter(l => l.si === lane.si).indexOf(lane);
+    const voice = (lane.si === 0 ? 1 : 5) + rank;
+    const hide = rank > 0 ? ' print-object="no"' : ''; // silences des voix secondaires masqués
+    for (const ev of lane.events) {
       let pos = ev.start;
       const evEnd = ev.start + ev.len;
       while (pos < evEnd) {
@@ -122,8 +131,8 @@ export function notesToMusicXml(input: RawNote[], meta: ScoreMeta): string {
           const tieStart = ev.pitches !== null && (pos + d < evEnd);
           if (ev.pitches === null) {
             const whole = d === L && pieces.length === 1;
-            out[m][si].push(
-              `<note><rest${whole ? ' measure="yes"' : ''}/><duration>${d}</duration><voice>${voice}</voice>` +
+            out[m][li].push(
+              `<note${hide}><rest${whole ? ' measure="yes"' : ''}/><duration>${d}</duration><voice>${voice}</voice>` +
               (whole ? '' : `<type>${type}</type>${dot ? '<dot/>' : ''}`) + `<staff>${staff}</staff></note>`
             );
           } else {
@@ -132,7 +141,7 @@ export function notesToMusicXml(input: RawNote[], meta: ScoreMeta): string {
               const octave = Math.floor(p / 12) - 1;
               const ties = (tieStop ? '<tie type="stop"/>' : '') + (tieStart ? '<tie type="start"/>' : '');
               const tied = (tieStop ? '<tied type="stop"/>' : '') + (tieStart ? '<tied type="start"/>' : '');
-              out[m][si].push(
+              out[m][li].push(
                 `<note>${ci > 0 ? '<chord/>' : ''}<pitch><step>${step}</step>${alter ? `<alter>${alter}</alter>` : ''}<octave>${octave}</octave></pitch>` +
                 `<duration>${d}</duration>${ties}<voice>${voice}</voice><type>${type}</type>${dot ? '<dot/>' : ''}` +
                 `<staff>${staff}</staff>${tied ? `<notations>${tied}</notations>` : ''}</note>`
@@ -156,7 +165,7 @@ export function notesToMusicXml(input: RawNote[], meta: ScoreMeta): string {
           `<per-minute>${Math.round(meta.bpm)}</per-minute></metronome></direction-type><sound tempo="${Math.round(meta.bpm)}"/></direction>`;
       }
     }
-    return `<measure number="${i + 1}">${attrs}${staves[0].join('')}<backup><duration>${L}</duration></backup>${staves[1].join('')}</measure>`;
+    return `<measure number="${i + 1}">${attrs}${staves.map(x => x.join('')).join(`<backup><duration>${L}</duration></backup>`)}</measure>`;
   });
 
   return `<?xml version="1.0" encoding="UTF-8"?>

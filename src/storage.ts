@@ -1,10 +1,13 @@
 import { get, set, del, keys, getMany } from 'idb-keyval';
+import { deleteOriginals } from './originals';
 
 export interface Piece {
   id: string;
   title: string;
   xml: string;
-  source: 'musicxml' | 'midi' | 'demo' | 'scan';
+  source: 'musicxml' | 'midi' | 'demo' | 'scan' | 'pcn';
+  code?: string; // codification PCN (référence quand elle existe)
+  hasOriginal?: boolean; // photo(s) / PDF d'origine conservés
   addedAt: number;
   lastPlayedAt?: number;
   bestRun?: { wrong: number; seconds: number };
@@ -36,6 +39,7 @@ export async function savePiece(p: Piece): Promise<void> {
 
 export async function deletePiece(id: string): Promise<void> {
   await del(PREFIX + id);
+  await deleteOriginals(id);
 }
 
 export function newId(): string {
