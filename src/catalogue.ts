@@ -4,7 +4,7 @@
 export interface CatalogueItem {
   id: string;
   title: string;
-  composer: 'J. S. Bach' | 'Beethoven' | 'Chopin';
+  composer: string;
   difficulty: number; // 1 (facile) à 5 (virtuose), estimation
   path: string; // chemin sous https://www.mutopiaproject.org/ftp/
   license: string;
@@ -20,6 +20,13 @@ const lvb = (id: string, title: string, difficulty: number, path: string, licens
   ({ id: 'cat-lvb-' + id, title, composer: 'Beethoven', difficulty, path: 'BeethovenLv/' + path, license });
 const chopin = (id: string, title: string, difficulty: number, path: string, license = PD): CatalogueItem =>
   ({ id: 'cat-chopin-' + id, title, composer: 'Chopin', difficulty, path: 'ChopinFF/' + path, license });
+const other = (composer: string, dir: string, id: string, title: string, difficulty: number, path: string, license = PD): CatalogueItem =>
+  ({ id: `cat-${dir.toLowerCase()}-${id}`, title, composer, difficulty, path: `${dir}/${path}`, license });
+const mozart = (id: string, t: string, d: number, p: string, l = PD) => other('Mozart', 'MozartWA', id, t, d, p, l);
+const satie = (id: string, t: string, d: number, p: string, l = PD) => other('Satie', 'SatieE', id, t, d, p, l);
+const debussy = (id: string, t: string, d: number, p: string, l = PD) => other('Debussy', 'DebussyC', id, t, d, p, l);
+const schumann = (id: string, t: string, d: number, p: string, l = PD) => other('Schumann', 'SchumannR', id, t, d, p, l);
+const schubert = (id: string, t: string, d: number, p: string, l = PD) => other('Schubert', 'SchubertF', id, t, d, p, l);
 
 export const CATALOGUE: CatalogueItem[] = [
   // ---------- Bach ----------
@@ -85,7 +92,41 @@ export const CATALOGUE: CatalogueItem[] = [
   chopin('fi66', 'Fantaisie-Impromptu op. 66', 5, 'O66/chopin_fantaisie-impromptu/chopin_fantaisie-impromptu.mid'),
   chopin('b1', 'Ballade n° 1 en sol mineur op. 23', 5, 'O23/chopin-op23-ballade-1/chopin-op23-ballade-1.mid', BYSA4),
   chopin('e10-12', 'Étude op. 10 n° 12 « Révolutionnaire »', 5, 'O10/op-10-12-wfi/op-10-12-wfi.mid'),
-  chopin('e25-1', 'Étude op. 25 n° 1 « Harpe éolienne »', 5, 'O25/chopin-op-25-01/chopin-op-25-01.mid')
+  chopin('e25-1', 'Étude op. 25 n° 1 « Harpe éolienne »', 5, 'O25/chopin-op-25-01/chopin-op-25-01.mid'),
+
+  // ---------- Mozart ----------
+  mozart('turque', 'Marche turque — Rondo alla turca (sonate K. 331)', 4, 'KV331/KV331_3_RondoAllaTurca/KV331_3_RondoAllaTurca.mid'),
+  mozart('331-tema', 'Sonate K. 331 — Thème (Andante grazioso)', 3, 'KV331/KV331_1_1_tema/KV331_1_1_tema.mid'),
+  mozart('545-1', 'Sonate facile K. 545 — Allegro', 3, 'KV545/K545-1/K545-1.mid', BYSA3),
+  mozart('545-2', 'Sonate facile K. 545 — Andante', 3, 'KV545/K545-2/K545-2.mid', BYSA3),
+  mozart('545-3', 'Sonate facile K. 545 — Rondo', 3, 'KV545/K545-3/K545-3.mid', BYSA3),
+  mozart('397', 'Fantaisie en ré mineur K. 397', 4, 'KV397/Fantasia/Fantasia.mid'),
+
+  // ---------- Satie, Debussy (France) ----------
+  satie('gym1', 'Gymnopédie n° 1', 2, 'gymnopedie_1/gymnopedie_1.mid'),
+  satie('gym2', 'Gymnopédie n° 2', 2, 'gymnopedie_2/gymnopedie_2.mid'),
+  satie('gym3', 'Gymnopédie n° 3', 2, 'gymnopedie_3/gymnopedie_3.mid'),
+  satie('gno1', 'Gnossienne n° 1', 3, 'Gnossienne/no_1/no_1.mid', BYSA4),
+  satie('gno2', 'Gnossienne n° 2', 3, 'Gnossienne/no_2/no_2.mid', BYSA4),
+  satie('gno3', 'Gnossienne n° 3', 3, 'Gnossienne/no_3/no_3.mid', BYSA4),
+  debussy('clair', 'Clair de lune (Suite bergamasque)', 4, 'L75/debussy_Ste_Bergamesq_Clair/debussy_Ste_Bergamesq_Clair.mid'),
+  debussy('arab1', 'Première Arabesque', 4, 'L66/debussy_Arabesque_1/debussy_Arabesque_1.mid'),
+  debussy('arab2', 'Deuxième Arabesque', 4, 'L66/debussy_Arabesque_2/debussy_Arabesque_2.mid', BYSA4),
+
+  // ---------- Schumann, Schubert, Grieg, Liszt ----------
+  schumann('reverie', 'Rêverie — Träumerei (Scènes d’enfants)', 3, 'O15/SchumannOp15No07/SchumannOp15No07.mid'),
+  schumann('pays', 'Des pays et des hommes étrangers (Scènes d’enfants)', 2, 'O15/SchumannOp15No01/SchumannOp15No01.mid'),
+  schumann('melodie', 'Mélodie (Album pour la jeunesse)', 1, 'O68/schumann-op68-01-melodie/schumann-op68-01-melodie.mid', 'CC BY-SA 2.5'),
+  schumann('laboureur', 'Le gai laboureur (Album pour la jeunesse)', 2, 'O68/schumann-op68-10-gai-laboureur/schumann-op68-10-gai-laboureur.mid', 'CC BY-SA 2.5'),
+  schumann('cavalier', 'Le cavalier sauvage (Album pour la jeunesse)', 2, 'O68/schumann-op68-08-cavalier-sauvage/schumann-op68-08-cavalier-sauvage.mid', 'CC BY-SA 2.5'),
+  schubert('imp2', 'Impromptu op. 90 n° 2 en mi bémol', 4, 'D899/SchubertF-D899-2-Impromptu/SchubertF-D899-2-Impromptu.mid'),
+  schubert('imp3', 'Impromptu op. 90 n° 3 en sol bémol', 4, 'D899/SchubertF-D899-3-Impromptu/SchubertF-D899-3-Impromptu.mid'),
+  schubert('imp4', 'Impromptu op. 90 n° 4 en la bémol', 4, 'D899/SchubertF-D899-4-Impromptu/SchubertF-D899-4-Impromptu.mid'),
+  schubert('moment3', 'Moment musical n° 3 en fa mineur', 3, 'D780/MomentsNo3/MomentsNo3.mid'),
+  schubert('marche1', 'Marche militaire n° 1 (piano)', 3, 'D733/SchubertF-D733-1-TroisMarches/SchubertF-D733-1-TroisMarches.mid'),
+  other('Grieg', 'GriegE', 'roi', 'Dans l’antre du roi de la montagne (Peer Gynt)', 3, 'O46/Dans_l_antre_du_roi_de_la_montagne/Dans_l_antre_du_roi_de_la_montagne.mid'),
+  other('Grieg', 'GriegE', 'trolls', 'Marche des trolls (Pièces lyriques)', 4, 'O54/Troldtog/Troldtog.mid'),
+  other('Liszt', 'LisztF', 'consol3', 'Consolation n° 3', 4, 'S.172/liszt-consolation-no3/liszt-consolation-no3.mid', 'CC BY 3.0')
 ];
 
 export const MUTOPIA = 'https://www.mutopiaproject.org/ftp/';

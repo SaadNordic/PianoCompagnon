@@ -80,23 +80,36 @@ export class Player {
       h('button', { class: 'icon', title: 'Bibliothèque', onclick: () => this.onBack() }, '←'),
       h('div', { class: 'title' }, this.piece.title),
       seg,
-      h('button', { class: 'icon', title: 'Recommencer au début', onclick: () => this.restart() }, '⏮'),
       this.listenBtn,
       this.loopBtn,
-      this.piece.hasOriginal ? h('button', { class: 'icon', title: 'Voir la partition originale (photo / PDF)', onclick: () => {
-        const box = h('div', { class: 'orig-box' });
-        openModal('Partition originale', box, [h('span', { class: 'spacer' }), h('button', { onclick: () => closeOrig() }, 'Fermer')]);
-        const closeOrig = () => document.querySelector('.modal-overlay')?.remove();
-        void renderOriginals(box, this.piece.id);
-      } }, '📄') : null,
-      h('button', { class: 'icon', title: 'Réglages', onclick: () => this.settingsEl.classList.toggle('open') }, '⚙'),
-      this.midiDot
+      this.midiDot,
+      h('button', { class: 'icon menu-btn', title: 'Menu', onclick: (e: Event) => { e.stopPropagation(); this.toggleMenu(); } }, '⋮')
     ]);
   }
 
   private settingsEl!: HTMLElement;
 
+  // un toucher hors du menu le referme
+  private menuAway = (e: Event) => {
+    const t = e.target as HTMLElement;
+    if (!this.settingsEl.contains(t) && !t.closest?.('.menu-btn')) this.toggleMenu(false);
+  };
+
+  private toggleMenu(open = !this.settingsEl.classList.contains('open')): void {
+    this.settingsEl.classList.toggle('open', open);
+    document.removeEventListener('pointerdown', this.menuAway, true);
+    if (open) setTimeout(() => document.addEventListener('pointerdown', this.menuAway, true), 0);
+  }
+
+  private showOriginal(): void {
+    const box = h('div', { class: 'orig-box' });
+    const close = openModal('Partition originale', box, [h('span', { class: 'spacer' }), h('button', { onclick: () => close() }, 'Fermer')]);
+    void renderOriginals(box, this.piece.id);
+  }
+
   private settingsPanel(): HTMLElement {
+    const action = (icon: string, label: string, run: () => void) =>
+      h('button', { class: 'menu-action', onclick: () => { this.toggleMenu(false); run(); } }, [h('span', { class: 'mrow-icon' }, icon), label]);
     const select = <T extends string | number>(value: T, options: [T, string][], onChange: (v: string) => void) => {
       const el = h('select', { onchange: (e: Event) => onChange((e.target as HTMLSelectElement).value) },
         options.map(([v, t]) => {
@@ -107,6 +120,10 @@ export class Player {
       return el;
     };
     this.settingsEl = h('div', { class: 'settings' }, [
+      action('⏮', 'Recommencer au début', () => this.restart()),
+      this.piece.hasOriginal ? action('📄', 'Voir la partition originale', () => this.showOriginal()) : null,
+      action('←', 'Retour à la bibliothèque', () => this.onBack()),
+      h('div', { class: 'menu-sep' }),
       h('label', {}, ["Vitesse d'écoute", select(this.speed, [[0.5, '50 %'], [0.75, '75 %'], [1, '100 %'], [1.25, '125 %']], v => {
         this.speed = Number(v); setPref('speed', this.speed);
       })]),
@@ -116,8 +133,7 @@ export class Player {
       h('label', {}, ['Taille de la partition', h('div', { class: 'row' }, [
         h('button', { class: 'icon', onclick: () => this.setZoom(this.zoom - 0.1) }, '−'),
         h('button', { class: 'icon', onclick: () => this.setZoom(this.zoom + 0.1) }, '+')
-      ])]),
-      h('button', { class: 'close', onclick: () => this.settingsEl.classList.remove('open') }, 'Fermer')
+      ])])
     ]);
     return this.settingsEl;
   }
@@ -182,6 +198,7 @@ export class Player {
   }
 
   destroy(): void {
+    document.removeEventListener('pointerdown', this.menuAway, true);
     this.stopListen();
     this.clearPending();
     this.unsub.forEach(f => f());

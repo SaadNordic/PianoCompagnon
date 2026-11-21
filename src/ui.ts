@@ -51,6 +51,39 @@ export function openModal(title: string, body: HTMLElement, footer: HTMLElement[
   return close;
 }
 
+export interface MenuItem { icon: string; label: string; desc?: string; onClick: () => void }
+
+/** Ligne de menu : icône, libellé, description, chevron. */
+export function menuRow(item: MenuItem): HTMLElement {
+  return h('button', { class: 'mrow', onclick: item.onClick }, [
+    h('span', { class: 'mrow-icon' }, item.icon),
+    h('span', { class: 'mrow-text' }, [h('span', { class: 'mrow-label' }, item.label), item.desc ? h('span', { class: 'mrow-desc' }, item.desc) : null]),
+    h('span', { class: 'mrow-chev' }, '›')
+  ]);
+}
+
+/** Menu d'actions qui monte du bas de l'écran (liste courte et fixe). */
+export function openSheet(title: string, items: MenuItem[]): () => void {
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  const overlay = h('div', { class: 'sheet-overlay', onclick: (e: Event) => { if (e.target === overlay) close(); } }, [
+    h('div', { class: 'sheet', role: 'menu' }, [
+      h('div', { class: 'sheet-title' }, title),
+      ...items.map(it => menuRow({ ...it, onClick: () => { close(); it.onClick(); } })),
+      h('button', { class: 'sheet-cancel', onclick: close }, 'Annuler')
+    ])
+  ]);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+  return close;
+}
+
 export interface TabDef { label: string; render: () => HTMLElement }
 
 /** Onglets : barre fixe, seul le contenu défile ; chaque onglet garde son état. */

@@ -8,6 +8,7 @@ import { midiInput } from './midiInput';
 import { Player } from './player';
 import { createTrainer } from './learn';
 import { showLibrary } from './library';
+import { checkForUpdate, isNative } from './updates';
 
 registerSW({ immediate: true });
 
@@ -49,4 +50,6 @@ void (async () => {
   startAutoSync();
   void midiInput.start();
   route();
+  // nouvelle version de l'APK ? (le navigateur, lui, se met à jour par le service worker)
+  if (isNative()) void checkForUpdate();
 })();

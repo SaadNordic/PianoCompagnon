@@ -52,7 +52,7 @@ export function openCatalogue(onAdded: () => void, onOpen: (id: string) => void)
   const listEl = h('div', { class: 'cat-list' });
   const search = h('input', { type: 'search', placeholder: '🔍 Rechercher : nocturne, menuet, sonate…' }) as HTMLInputElement;
   const chips = h('div', { class: 'filters' });
-  const composers = ['Tous', 'J. S. Bach', 'Beethoven', 'Chopin'];
+  const composers = ['Tous', ...new Set(CATALOGUE.map(i => i.composer))];
 
   const render = async () => {
     chips.replaceChildren(...composers.map(c => h('button', { class: 'fchip' + (c === composer ? ' on' : ''), onclick: () => { composer = c; void render(); } }, c)));
@@ -89,7 +89,7 @@ export function openCatalogue(onAdded: () => void, onOpen: (id: string) => void)
   search.addEventListener('input', () => { query = search.value; void render(); });
 
   const body = h('div', { class: 'form' }, [
-    h('p', { class: 'meta' }, `${CATALOGUE.length} pièces célèbres du domaine public (Bach, Beethoven, Chopin), issues du Mutopia Project. « Ajouter » les copie dans votre répertoire.`),
+    h('p', { class: 'meta' }, `${CATALOGUE.length} pièces célèbres du domaine public (Bach, Mozart, Beethoven, Chopin, Satie, Debussy…), issues du Mutopia Project. « Ajouter » les copie dans votre répertoire.`),
     search, chips, listEl
   ]);
   const close = openModal('📚 Catalogue', body, [h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: () => close() }, 'Fermer')]);

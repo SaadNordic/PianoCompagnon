@@ -1,6 +1,7 @@
 // Écran d'accueil : bibliothèque de partitions (recherche, classement, tri) + modules Apprendre.
 
-import { h, toast, openModal, tabs } from './ui';
+import { h, toast, openModal, tabs, openSheet, menuRow } from './ui';
+import { checkForUpdate, installUpdate, onUpdateState, versionLabel, isNative, type UpdateState } from './updates';
 import { importFile, ImportError } from './importers';
 import { listPieces, savePiece, deletePiece, newId, pref, setPref, getSession, listPieces as listIn, adoptLocalPieces, type Piece } from './storage';
 import { syncNow, onSyncState, onRemoteChange, login, logout, type SyncState } from './sync';
@@ -31,6 +32,7 @@ const stars = (n = 0) => '★'.repeat(n) + '☆'.repeat(5 - n);
 
 let unsubMidi: (() => void) | null = null;
 let unsubSync: (() => void)[] = [];
+let unsubUpdate: (() => void) | null = null;
 
 export async function showLibrary(app: HTMLElement): Promise<void> {
   let pieces = await listPieces();
@@ -282,7 +284,10 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     shown = shown.sort(cmp[sort]);
     countEl.textContent = `${shown.length} / ${pieces.length}`;
     if (!pieces.length) {
-      listEl.replaceChildren(h('p', { class: 'empty' }, 'Aucune partition pour le moment. Importez un fichier MusicXML ou MIDI.'));
+      listEl.replaceChildren(h('div', { class: 'empty' }, [
+        h('p', {}, 'Aucune partition pour le moment.'),
+        h('button', { class: 'primary', onclick: () => openAdd() }, '＋ Ajouter une partition')
+      ]));
       return;
     }
     if (!shown.length) {
@@ -310,7 +315,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
   };
 
   // ---------- page ----------
-  const search = h('input', { type: 'search', class: 'search', placeholder: '🔍 Rechercher : titre, compositeur, catégorie, étiquette…' }) as HTMLInputElement;
+  const search = h('input', { type: 'search', class: 'search', placeholder: '🔍 Rechercher…', title: 'Titre, compositeur, catégorie, étiquette…' }) as HTMLInputElement;
   search.addEventListener('input', () => { query = search.value; renderList(); });
   const sortSel = h('select', { title: 'Trier', onchange: (e: Event) => {
     sort = (e.target as HTMLSelectElement).value as SortKey; setPref('lib.sort', sort); renderList();
@@ -321,14 +326,27 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
   }));
 
   // ---------- compte ----------
-  const accountBtn = h('button', { class: 'account' });
+  const accountRow = menuRow({ icon: '👤', label: '', onClick: () => openAccount() });
+  const accLabel = accountRow.querySelector('.mrow-label')!;
+  const accDesc = h('span', { class: 'mrow-desc' });
+  accountRow.querySelector('.mrow-text')!.append(accDesc);
+  // pastille sur « Plus » : problème de synchronisation ou nouvelle version
+  let syncBad = false, updAvail = false;
+  const plusBadge = h('span', { class: 'nav-badge' });
+  const paintBadge = () => plusBadge.classList.toggle('on', syncBad || updAvail);
   const paintAccount = (st: SyncState) => {
     const s = getSession();
-    if (!s) { accountBtn.textContent = '👤 Se connecter'; accountBtn.className = 'account off'; return; }
-    const icon = st.state === 'syncing' ? '⟳' : st.state === 'ok' ? '✓' : st.state === 'offline' ? '⚡' : st.state === 'error' ? '⚠' : '';
-    accountBtn.textContent = `👤 ${s.user.name} ${icon}`;
-    accountBtn.className = 'account ' + st.state;
-    accountBtn.title = st.state === 'ok' ? 'Synchronisé' : st.state === 'offline' ? `Serveur injoignable (VPN ?) — ${st.pending} modification(s) en attente` : st.state === 'error' ? st.message : 'Synchronisation…';
+    syncBad = !!s && (st.state === 'offline' || st.state === 'error');
+    paintBadge();
+    if (!s) {
+      accLabel.textContent = 'Se connecter';
+      accDesc.textContent = 'Retrouver répertoire et progression sur tous vos appareils';
+      return;
+    }
+    accLabel.textContent = `Mon compte — ${s.user.name}`;
+    accDesc.textContent = st.state === 'ok' ? `Synchronisé à ${new Date(st.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`
+      : st.state === 'offline' ? `Serveur injoignable (VPN ?) — ${st.pending} modification(s) en attente`
+      : st.state === 'error' ? `⚠ ${st.message}` : 'Synchronisation…';
   };
   unsubSync.forEach(f => f());
   unsubSync = [onSyncState(paintAccount), onRemoteChange(() => void reload())];
@@ -466,53 +484,154 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       h('button', { class: 'primary', onclick: () => close() }, 'Fermer')
     ], un);
   };
-  accountBtn.addEventListener('click', openAccount);
 
+  // ---------- état du piano ----------
   const chip = h('div', { class: 'chip' });
   unsubMidi?.();
   unsubMidi = midiInput.onStatus(s => {
     chip.className = 'chip ' + (s.state === 'connected' ? 'ok' : 'warn');
     chip.textContent = (s.state === 'connected' ? '🎹 ' : '⚠ ') + statusLabel(s);
+    chip.title = statusLabel(s);
   });
 
-  app.replaceChildren(h('div', { class: 'library' }, [
-    h('header', { class: 'lib-head' }, [
-      h('img', { src: 'icon.svg', alt: '', class: 'logo' }),
-      h('div', {}, [h('h1', {}, 'Piano Compagnon'), h('div', { class: 'tag' }, 'La partition avance quand vous jouez juste.')]),
-      chip,
-      accountBtn,
-      h('button', { class: 'icon', title: 'Réglages', onclick: () => openSettings() }, '⚙')
+  // ---------- ajouter ----------
+  const openAdd = () => openSheet('Ajouter une partition', [
+    { icon: '📁', label: 'Importer un fichier', desc: 'PDF, photo, MusicXML, MIDI ou codification PCN', onClick: () => fileInput.click() },
+    { icon: '📷', label: 'Photographier une page', desc: 'Claude lit la partition note par note', onClick: () => cameraInput.click() },
+    { icon: '📚', label: 'Catalogue de pièces célèbres', desc: 'Bach, Beethoven, Chopin… (domaine public)', onClick: () => openCatalogue(() => void reload(), id => open({ id } as Piece)) }
+  ]);
+
+  // ---------- aide ----------
+  const openHelp = () => {
+    const body = h('div', { class: 'help-body', html: `
+      <p><b>Branchement :</b> câble USB-C (téléphone) vers USB-B (prise carrée à l'arrière du piano). Le voyant en haut passe au vert avec le nom du piano.</p>
+      <p><b>Ajouter une partition :</b> bouton <b>＋ Ajouter</b> en bas. Formats acceptés : PDF et photos (lus par Claude), codification PCN (<code>.pcn</code>), MusicXML (<code>.musicxml</code>, <code>.xml</code>, <code>.mxl</code>) et MIDI (<code>.mid</code>). Plusieurs photos importées ensemble = les pages d'un même morceau. Une partition lue par photo peut contenir des erreurs : écoutez-la avec ▶ pour vérifier.</p>
+      <p><b>Où trouver des partitions :</b> le Catalogue intégré, MuseScore (exporter en MusicXML), IMSLP / Mutopia (domaine public), ou tout fichier MIDI.</p>
+      <p><b>Classer :</b> touchez ✎ pour renseigner compositeur, catégorie, étiquettes, difficulté. ☆ met en favori.</p>
+      <p><b>Pendant le jeu :</b> la note attendue s'allume sur le clavier (bleu = main droite, orange = main gauche). Touchez une mesure pour y aller, ⟲ pour répéter un passage. En « MD » ou « MG », l'appli joue l'autre main pour vous. Le menu ⋮ donne les autres options (recommencer, vitesse, taille…).</p>` });
+    const close = openModal('Aide', body, [h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: () => close() }, 'Fermer')]);
+  };
+
+  // ---------- mises à jour (appli + données) ----------
+  const updRow = menuRow({ icon: '🔄', label: 'Mises à jour', desc: versionLabel(), onClick: () => openUpdates() });
+  const updDesc = updRow.querySelector('.mrow-desc')!;
+  const banner = h('div', { class: 'update-banner', style: 'display:none' });
+  const paintUpdate = (u: UpdateState) => {
+    updAvail = u.state === 'available';
+    paintBadge();
+    updDesc.textContent = u.state === 'available' ? (u.latest ? `Nouvelle version ${u.latest} disponible` : 'Nouvelle version disponible')
+      : u.state === 'checking' ? 'Recherche de mises à jour…' : `${versionLabel()} · appli et données`;
+    banner.style.display = u.state === 'available' ? '' : 'none';
+    if (u.state === 'available') banner.replaceChildren(
+      h('span', {}, `🎉 Nouvelle version${u.latest ? ' ' + u.latest : ''} disponible`),
+      h('button', { class: 'primary', onclick: installUpdate }, 'Installer')
+    );
+  };
+  unsubUpdate?.();
+  unsubUpdate = onUpdateState(paintUpdate);
+
+  const openUpdates = () => {
+    const appStatus = h('p', { class: 'meta' });
+    const appBtn = h('button', {}) as HTMLButtonElement;
+    const dataStatus = h('p', { class: 'meta' });
+    const unU = onUpdateState(u => {
+      appStatus.className = 'meta' + (u.state === 'available' ? ' ok' : u.state === 'error' ? ' bad' : '');
+      appStatus.textContent = u.state === 'checking' ? 'Recherche d\'une nouvelle version…'
+        : u.state === 'available' ? (isNative() ? `La version ${u.latest} est disponible. Le téléchargement s'ouvre, puis touchez le fichier pour l'installer (vos partitions sont conservées).` : 'Nouvelle version téléchargée : rechargez la page.')
+        : u.state === 'uptodate' ? 'L\'appli est à jour.'
+        : u.state === 'error' ? u.message : '';
+      appBtn.textContent = u.state === 'available' ? (isNative() ? `Installer la version ${u.latest}` : 'Recharger') : 'Vérifier maintenant';
+      appBtn.className = u.state === 'available' ? 'primary' : '';
+      appBtn.disabled = u.state === 'checking';
+      appBtn.onclick = () => (u.state === 'available' ? installUpdate() : void checkForUpdate());
+    });
+    const unS = onSyncState(st => {
+      dataStatus.textContent = !getSession() ? 'Sans compte, les données restent sur cet appareil. Connectez-vous pour les synchroniser.'
+        : st.state === 'ok' ? `Données synchronisées à ${new Date(st.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}.`
+        : st.state === 'syncing' ? 'Synchronisation en cours…'
+        : st.state === 'offline' ? `Serveur injoignable (VPN activé ?). ${st.pending} modification(s) attendent d'être envoyées.`
+        : st.state === 'error' ? st.message : '';
+    });
+    const refreshData = async () => { await syncNow(); await reload(); toast('Données actualisées'); };
+    const body = h('div', { class: 'form' }, [
+      h('h3', {}, 'Application'),
+      h('p', { class: 'meta' }, `Installée : ${versionLabel()}.` + (isNative() ? ' La recherche se fait aussi à chaque lancement.' : ' Le navigateur récupère les nouvelles versions tout seul.')),
+      appStatus, h('div', {}, appBtn),
+      h('h3', {}, 'Données'),
+      h('p', { class: 'meta' }, 'Partitions, fiches et progression : envoie vos modifications et récupère celles faites sur un autre appareil.'),
+      dataStatus,
+      h('div', {}, h('button', { onclick: () => void refreshData() }, '⟳ Actualiser les données'))
+    ]);
+    const close = openModal('Mises à jour', body, [
+      h('span', { class: 'spacer' }),
+      h('button', { onclick: () => close() }, 'Fermer'),
+      h('button', { class: 'primary', onclick: () => { void checkForUpdate(); void refreshData(); } }, 'Tout actualiser')
+    ], () => { unU(); unS(); });
+    void checkForUpdate(); // on cherche tout de suite une nouvelle version à l'ouverture
+  };
+
+  // ---------- sections ----------
+  type Section = 'partitions' | 'apprendre' | 'plus';
+  const section = pref<Section>('lib.section', 'partitions');
+  const goLearn = (id: string) => { unlockAudio(); location.hash = `#/apprendre/${id}`; };
+  const pages: Record<Section, HTMLElement> = {
+    partitions: h('section', {}, [
+      h('div', { class: 'lib-title' }, [h('h2', {}, 'Mes partitions'), countEl]),
+      h('div', { class: 'lib-tools' }, [search, sortSel]),
+      chipsEl,
+      listEl
     ]),
-    h('div', { class: 'actions' }, [
-      h('button', { class: 'primary big-btn', onclick: () => fileInput.click() }, '＋ Importer (PDF, photo, MusicXML, MIDI)'),
-      h('button', { class: 'cam-btn', title: 'Photographier une page de partition', onclick: () => cameraInput.click() }, '📷'),
-      h('button', { class: 'cat-btn', title: 'Catalogue de pièces célèbres', onclick: () => openCatalogue(() => void reload(), id => open({ id } as Piece)) }, '📚 Catalogue'),
-      fileInput, cameraInput
+    apprendre: h('section', {}, [
+      h('h2', {}, 'Apprendre'),
+      h('p', { class: 'meta section-intro' }, 'Exercices courts au piano : lecture de notes, accords, gammes, oreille.'),
+      h('div', { class: 'learn-grid' }, EXERCISES.map(e => {
+        const st = getStats(e.id);
+        return h('button', { class: 'learn-card', onclick: () => goLearn(e.id) }, [
+          h('div', { class: 'lc-icon' }, e.icon),
+          h('div', { class: 'lc-title' }, e.title),
+          h('div', { class: 'lc-desc' }, e.desc),
+          st.total ? h('div', { class: 'lc-stats' }, `${st.total} réussites · meilleure série ${st.best}`) : null
+        ]);
+      }))
     ]),
-    h('div', { class: 'lib-title' }, [h('h2', {}, 'Mes partitions'), countEl]),
-    h('div', { class: 'lib-tools' }, [search, sortSel]),
-    chipsEl,
-    listEl,
-    h('h2', {}, 'Apprendre'),
-    h('div', { class: 'learn-grid' }, EXERCISES.map(e => {
-      const st = getStats(e.id);
-      return h('button', { class: 'learn-card', onclick: () => { unlockAudio(); location.hash = `#/apprendre/${e.id}`; } }, [
-        h('div', { class: 'lc-icon' }, e.icon),
-        h('div', { class: 'lc-title' }, e.title),
-        h('div', { class: 'lc-desc' }, e.desc),
-        st.total ? h('div', { class: 'lc-stats' }, `${st.total} réussites · meilleure série ${st.best}`) : null
-      ]);
-    })),
-    h('details', { class: 'help' }, [
-      h('summary', {}, 'Brancher le piano et trouver des partitions'),
-      h('div', { html: `
-        <p><b>Branchement :</b> câble USB-C (téléphone) vers USB-B (prise carrée à l'arrière du piano). Le voyant en haut passe au vert avec le nom du piano.</p>
-        <p><b>Formats acceptés :</b> PDF et photos (lus par Claude : renseignez votre clé dans ⚙), codification PCN (<code>.pcn</code>), MusicXML (<code>.musicxml</code>, <code>.xml</code>, <code>.mxl</code>) et MIDI (<code>.mid</code>). Plusieurs photos importées ensemble = les pages d'un même morceau. Une partition lue par photo peut contenir des erreurs : écoutez-la avec ▶ pour vérifier.</p>
-        <p><b>Où trouver des partitions :</b> MuseScore (exporter en MusicXML), IMSLP / Mutopia (domaine public), ou tout fichier MIDI.</p>
-        <p><b>Classer :</b> touchez ✎ pour renseigner compositeur, catégorie, étiquettes, difficulté. ☆ met en favori.</p>
-        <p><b>Pendant le jeu :</b> la note attendue s'allume sur le clavier (bleu = main droite, orange = main gauche). Touchez une mesure pour y aller, ⟲ pour répéter un passage. En « MD » ou « MG », l'appli joue l'autre main pour vous.</p>` })
+    plus: h('section', {}, [
+      h('h2', {}, 'Compte'),
+      h('div', { class: 'mlist' }, [accountRow]),
+      h('h2', {}, 'Application'),
+      h('div', { class: 'mlist' }, [
+        updRow,
+        menuRow({ icon: '⚙', label: 'Réglages', desc: 'Clé de lecture des PDF et photos (sans compte)', onClick: () => openSettings() }),
+        menuRow({ icon: '❓', label: 'Aide', desc: 'Brancher le piano, trouver des partitions, jouer', onClick: openHelp })
+      ])
     ])
+  };
+  const body = h('main', { class: 'home-body' });
+  const navBtn = (s: Section, icon: string, label: string, extra?: HTMLElement) =>
+    h('button', { class: 'nav-item', 'data-s': s, onclick: () => show(s) }, [h('span', { class: 'nav-icon' }, [icon, extra ?? null]), h('span', {}, label)]);
+  const nav = h('nav', { class: 'bottom-nav' }, [
+    navBtn('partitions', '🎼', 'Partitions'),
+    navBtn('apprendre', '🎓', 'Apprendre'),
+    h('button', { class: 'nav-item nav-add', onclick: openAdd }, [h('span', { class: 'nav-icon' }, '＋'), h('span', {}, 'Ajouter')]),
+    navBtn('plus', '☰', 'Plus', plusBadge)
+  ]);
+  const show = (s: Section) => {
+    setPref('lib.section', s);
+    nav.querySelectorAll('.nav-item[data-s]').forEach(b => b.classList.toggle('on', b.getAttribute('data-s') === s));
+    body.replaceChildren(h('div', { class: 'home-inner' }, [banner, pages[s]]));
+    body.scrollTop = 0;
+  };
+
+  app.replaceChildren(h('div', { class: 'home' }, [
+    h('header', { class: 'home-head' }, [
+      h('img', { src: 'icon.svg', alt: '', class: 'logo' }),
+      h('div', { class: 'home-name' }, [h('h1', {}, 'Piano Compagnon'), h('div', { class: 'tag' }, 'La partition avance quand vous jouez juste.')]),
+      chip
+    ]),
+    body,
+    nav,
+    fileInput, cameraInput
   ]));
   renderChips();
   renderList();
+  show(section in pages ? section : 'partitions');
 }
