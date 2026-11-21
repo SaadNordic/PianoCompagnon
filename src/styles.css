@@ -74,6 +74,16 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 .piece-sub .rec { color: var(--muted); font-size: 0.8rem; }
 button.danger { color: #ffb3b5; border-color: #6b2b2e; }
 
+/* reconnaissance */
+.cam-btn { font-size: 1.4rem; padding: 0 18px; }
+.scan-body { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding-top: 18px; }
+.scan-status { font-size: 1.1rem; font-weight: 600; }
+.scan-status.bad { color: #ff9a9d; }
+.scan-elapsed { color: var(--muted); font-variant-numeric: tabular-nums; }
+.scan-spinner { width: 46px; height: 46px; border-radius: 50%; border: 4px solid var(--panel2); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.form h3 { margin: 0; font-size: 1rem; }
+
 /* fenêtre modale : taille fixe, seul le corps défile */
 .modal-overlay { position: fixed; inset: 0; background: rgba(6, 7, 10, 0.65); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 12px; }
 .modal {

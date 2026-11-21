@@ -4,7 +4,7 @@ export interface Piece {
   id: string;
   title: string;
   xml: string;
-  source: 'musicxml' | 'midi' | 'demo';
+  source: 'musicxml' | 'midi' | 'demo' | 'scan';
   addedAt: number;
   lastPlayedAt?: number;
   bestRun?: { wrong: number; seconds: number };

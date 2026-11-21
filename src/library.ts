@@ -6,6 +6,7 @@ import { listPieces, savePiece, deletePiece, newId, pref, setPref, type Piece } 
 import { midiInput, statusLabel } from './midiInput';
 import { unlockAudio } from './synth';
 import { EXERCISES, getStats } from './learn';
+import { isScanFile, scanScore, getApiKey, setApiKey, ScanError, type ScanProgress } from './scan';
 
 type SortKey = 'recent' | 'added' | 'title' | 'composer' | 'difficulty' | 'plays';
 const SORTS: [SortKey, string][] = [
@@ -37,9 +38,22 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
 
   // ---------- import ----------
   const fileInput = h('input', { type: 'file', multiple: true, style: 'display:none' }) as HTMLInputElement;
+  const cameraInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none' }) as HTMLInputElement;
   fileInput.addEventListener('change', async () => {
-    const files = [...(fileInput.files ?? [])];
+    const all = [...(fileInput.files ?? [])];
     fileInput.value = '';
+    await handleFiles(all);
+  });
+  cameraInput.addEventListener('change', async () => {
+    const all = [...(cameraInput.files ?? [])];
+    cameraInput.value = '';
+    await handleFiles(all);
+  });
+
+  const handleFiles = async (all: File[]) => {
+    const scans = all.filter(isScanFile);
+    const files = all.filter(f => !isScanFile(f));
+    if (scans.length) { runScan(scans); if (!files.length) return; }
     const added: Piece[] = [];
     for (const f of files) {
       try {
@@ -55,9 +69,79 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       }
     }
     await reload();
-    if (added.length === 1) editPiece(added[0], true); // on propose tout de suite de la classer
-    else if (added.length) toast(`${added.length} partitions ajoutées`);
-  });
+    if (added.length === 1 && !scans.length) editPiece(added[0], true); // on propose tout de suite de la classer
+    else if (added.length) toast(`${added.length} partition${added.length > 1 ? 's' : ''} ajoutée${added.length > 1 ? 's' : ''}`);
+  };
+
+  // ---------- reconnaissance PDF / photos ----------
+  const runScan = (scans: File[]) => {
+    if (!getApiKey()) { openSettings(() => runScan(scans)); return; }
+    const controller = new AbortController();
+    const status = h('div', { class: 'scan-status' }, 'Préparation des pages…');
+    const elapsed = h('div', { class: 'scan-elapsed' });
+    const t0 = Date.now();
+    const timer = window.setInterval(() => {
+      const s = Math.round((Date.now() - t0) / 1000);
+      elapsed.textContent = `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
+    }, 1000);
+    const body = h('div', { class: 'scan-body' }, [
+      h('div', { class: 'scan-spinner' }),
+      status, elapsed,
+      h('p', { class: 'meta' }, `${scans.length} fichier${scans.length > 1 ? 's' : ''} : ${scans.map(f => f.name).join(', ')}`),
+      h('p', { class: 'meta' }, 'Claude lit la partition note par note. Comptez 1 à 3 minutes par page ; vous pouvez laisser le téléphone posé.')
+    ]);
+    const close = openModal('Lecture de la partition', body, [
+      h('span', { class: 'spacer' }),
+      h('button', { onclick: () => close() }, 'Annuler')
+    ], () => { controller.abort(); clearInterval(timer); });
+    const label = (p: ScanProgress) => p.phase === 'prepare' ? 'Préparation des pages…'
+      : p.phase === 'reading' || !p.measures ? 'Claude lit la partition…'
+      : `Transcription : ${p.measures} mesure${p.measures > 1 ? 's' : ''}…`;
+    const fallbackTitle = scans[0].name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ');
+    scanScore(scans, fallbackTitle, p => { status.textContent = label(p); }, controller.signal)
+      .then(async r => {
+        clearInterval(timer);
+        const p: Piece = {
+          id: newId(), title: r.title, composer: r.composer, xml: r.xml, source: 'scan', addedAt: Date.now(),
+          category: filter !== ALL && filter !== FAV && filter !== NONE ? filter : undefined,
+          note: r.warning
+        };
+        await savePiece(p);
+        close();
+        await reload();
+        toast(`${r.measures} mesures reconnues${r.warning ? ' — ' + r.warning : ''}`, r.warning ? 6000 : 2500);
+        editPiece(p, true);
+      })
+      .catch(e => {
+        clearInterval(timer);
+        if (controller.signal.aborted) return;
+        status.textContent = e instanceof ScanError ? e.message : `Erreur : ${(e as Error).message}`;
+        status.classList.add('bad');
+        body.querySelector('.scan-spinner')?.remove();
+      });
+  };
+
+  // ---------- réglages ----------
+  const openSettings = (then?: () => void) => {
+    const key = h('input', { type: 'password', value: getApiKey(), placeholder: 'sk-ant-…', autocomplete: 'off' }) as HTMLInputElement;
+    const body = h('div', { class: 'form' }, [
+      h('h3', {}, 'Lecture des PDF et des photos'),
+      h('p', { class: 'meta' }, 'La reconnaissance des partitions utilise Claude (Anthropic). Il faut une clé API personnelle : créez-la sur console.anthropic.com, rubrique « API Keys », après avoir ajouté un peu de crédit. Coût indicatif : quelques dizaines de centimes par page.'),
+      h('label', { class: 'field' }, [h('span', {}, 'Clé API Claude'), key]),
+      h('p', { class: 'meta' }, "La clé reste uniquement sur ce téléphone. Elle n'est envoyée qu'à Anthropic, au moment de lire une partition.")
+    ]);
+    const close = openModal('Réglages', body, [
+      h('span', { class: 'spacer' }),
+      h('button', { onclick: () => close() }, 'Fermer'),
+      h('button', { class: 'primary', onclick: () => {
+        setApiKey(key.value);
+        close();
+        toast(key.value.trim() ? 'Clé enregistrée' : 'Clé effacée');
+        if (key.value.trim()) then?.();
+      } }, 'Enregistrer')
+    ]);
+    setTimeout(() => key.focus(), 50);
+  };
 
   // ---------- fiche d'une partition ----------
   const editPiece = (p: Piece, isNew = false) => {
@@ -170,7 +254,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
           p.difficulty ? h('span', { class: 'diff', title: `Difficulté ${p.difficulty}/5` }, stars(p.difficulty)) : null,
           p.bestRun ? h('span', { class: 'rec' }, `record ${p.bestRun.wrong} faute${p.bestRun.wrong > 1 ? 's' : ''} · ${fmtTime(p.bestRun.seconds)}`) : null,
           !p.composer && !p.category && !p.tags?.length && !p.bestRun
-            ? h('span', {}, p.source === 'midi' ? 'MIDI' : p.source === 'demo' ? 'Exemple' : 'MusicXML') : null
+            ? h('span', {}, p.source === 'midi' ? 'MIDI' : p.source === 'demo' ? 'Exemple' : p.source === 'scan' ? 'PDF / photo' : 'MusicXML') : null
         ])
       ]),
       h('button', { class: 'icon', title: 'Fiche, classement', onclick: () => editPiece(p) }, '✎')
@@ -199,11 +283,13 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     h('header', { class: 'lib-head' }, [
       h('img', { src: 'icon.svg', alt: '', class: 'logo' }),
       h('div', {}, [h('h1', {}, 'Piano Compagnon'), h('div', { class: 'tag' }, 'La partition avance quand vous jouez juste.')]),
-      chip
+      chip,
+      h('button', { class: 'icon', title: 'Réglages', onclick: () => openSettings() }, '⚙')
     ]),
     h('div', { class: 'actions' }, [
-      h('button', { class: 'primary big-btn', onclick: () => fileInput.click() }, '＋ Importer des partitions'),
-      fileInput
+      h('button', { class: 'primary big-btn', onclick: () => fileInput.click() }, '＋ Importer (PDF, photo, MusicXML, MIDI)'),
+      h('button', { class: 'cam-btn', title: 'Photographier une page de partition', onclick: () => cameraInput.click() }, '📷'),
+      fileInput, cameraInput
     ]),
     h('div', { class: 'lib-title' }, [h('h2', {}, 'Mes partitions'), countEl]),
     h('div', { class: 'lib-tools' }, [search, sortSel]),
@@ -223,7 +309,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       h('summary', {}, 'Brancher le piano et trouver des partitions'),
       h('div', { html: `
         <p><b>Branchement :</b> câble USB-C (téléphone) vers USB-B (prise carrée à l'arrière du piano). Le voyant en haut passe au vert avec le nom du piano.</p>
-        <p><b>Formats acceptés :</b> MusicXML (<code>.musicxml</code>, <code>.xml</code>, <code>.mxl</code>) et MIDI (<code>.mid</code>). PDF, photo et audio arrivent bientôt.</p>
+        <p><b>Formats acceptés :</b> PDF et photos (lus par Claude : renseignez votre clé dans ⚙), MusicXML (<code>.musicxml</code>, <code>.xml</code>, <code>.mxl</code>) et MIDI (<code>.mid</code>). Plusieurs photos importées ensemble = les pages d'un même morceau. Une partition lue par photo peut contenir des erreurs : écoutez-la avec ▶ pour vérifier.</p>
         <p><b>Où trouver des partitions :</b> MuseScore (exporter en MusicXML), IMSLP / Mutopia (domaine public), ou tout fichier MIDI.</p>
         <p><b>Classer :</b> touchez ✎ pour renseigner compositeur, catégorie, étiquettes, difficulté. ☆ met en favori.</p>
         <p><b>Pendant le jeu :</b> la note attendue s'allume sur le clavier (bleu = main droite, orange = main gauche). Touchez une mesure pour y aller, ⟲ pour répéter un passage. En « MD » ou « MG », l'appli joue l'autre main pour vous.</p>` })

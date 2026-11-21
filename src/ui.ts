@@ -29,8 +29,15 @@ export function toast(msg: string, ms = 1600): void {
 }
 
 /** Fenêtre modale à taille fixe : seul le corps défile. Renvoie la fonction de fermeture. */
-export function openModal(title: string, body: HTMLElement, footer: HTMLElement[]): () => void {
-  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+export function openModal(title: string, body: HTMLElement, footer: HTMLElement[], onClose?: () => void): () => void {
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+    onClose?.();
+  };
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
   const overlay = h('div', { class: 'modal-overlay', onclick: (e: Event) => { if (e.target === overlay) close(); } }, [
     h('div', { class: 'modal', role: 'dialog' }, [
