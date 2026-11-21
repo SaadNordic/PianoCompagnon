@@ -9,8 +9,10 @@ import { Player } from './player';
 import { createTrainer } from './learn';
 import { showLibrary } from './library';
 import { checkForUpdate, isNative } from './updates';
+import { enableHorizontalScroll } from './ui';
 
 registerSW({ immediate: true });
+enableHorizontalScroll();
 
 const app = document.getElementById('app')!;
 let player: { destroy(): void } | null = null;

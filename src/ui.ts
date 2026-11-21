@@ -51,6 +51,45 @@ export function openModal(title: string, body: HTMLElement, footer: HTMLElement[
   return close;
 }
 
+/**
+ * Rangées défilant à l'horizontale (.filters) : au doigt elles glissent d'elles-mêmes ;
+ * à la souris on ajoute la molette et le glisser-déposer. Installé une fois pour toute l'appli.
+ */
+export function enableHorizontalScroll(selector = '.filters'): void {
+  document.addEventListener('wheel', e => {
+    const row = (e.target as HTMLElement).closest?.(selector) as HTMLElement | null;
+    if (!row || row.scrollWidth <= row.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    const max = row.scrollWidth - row.clientWidth;
+    // au bout de la rangée, on laisse la page défiler normalement
+    if ((e.deltaY < 0 && row.scrollLeft <= 0) || (e.deltaY > 0 && row.scrollLeft >= max - 1)) return;
+    e.preventDefault();
+    row.scrollLeft += e.deltaY;
+  }, { passive: false });
+
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    const row = (e.target as HTMLElement).closest?.(selector) as HTMLElement | null;
+    if (!row || row.scrollWidth <= row.clientWidth) return;
+    const x0 = e.clientX, left0 = row.scrollLeft;
+    let dragging = false;
+    const move = (m: PointerEvent) => {
+      if (!dragging && Math.abs(m.clientX - x0) < 6) return;
+      dragging = true;
+      row.classList.add('dragging');
+      row.scrollLeft = left0 - (m.clientX - x0);
+    };
+    const up = () => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      row.classList.remove('dragging');
+      // un glissement ne doit pas sélectionner la puce sous la souris
+      if (dragging) document.addEventListener('click', ev => { ev.stopPropagation(); ev.preventDefault(); }, { capture: true, once: true });
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  });
+}
+
 export interface MenuItem { icon: string; label: string; desc?: string; onClick: () => void }
 
 /** Ligne de menu : icône, libellé, description, chevron. */
