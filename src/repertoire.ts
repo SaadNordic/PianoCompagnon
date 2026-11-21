@@ -1,6 +1,7 @@
 // Répertoire de départ (œuvres du domaine public), codé au format PCN.
 
-import { PCN_HEADER } from './codification';
+import { PCN_HEADER, parsePcn, pcnToXml } from './codification';
+import { ns, pref, setPref, getPiece, storePiece, removePieceLocal } from './storage';
 
 export interface RepertoireItem { id: string; title: string; composer: string; difficulty: number; tags: string[]; code: string }
 
@@ -80,3 +81,19 @@ export const REPERTOIRE: RepertoireItem[] = [
   { id: 'rep-elise', title: 'Lettre à Élise (partie A)', composer: 'Beethoven', difficulty: 3, tags: ['romantique'], code: elise },
   { id: 'rep-prelude-do', title: 'Prélude en do majeur (BWV 846, début)', composer: 'J. S. Bach', difficulty: 3, tags: ['baroque', 'arpèges'], code: prelude }
 ];
+
+/** Ajoute le répertoire de départ dans l'espace courant (une fois par espace, sans synchroniser). */
+export async function seedRepertoire(): Promise<void> {
+  const flag = `seeded.rep1.${ns()}`;
+  if (pref(flag, false) || (ns() === 'local' && pref('seeded.rep1', false))) return;
+  if (ns() === 'local') await removePieceLocal('demo-ode'); // ancien morceau d'exemple
+  let t = Date.now();
+  for (const r of REPERTOIRE) {
+    if (await getPiece(r.id)) continue;
+    await storePiece({
+      id: r.id, title: r.title, composer: r.composer, difficulty: r.difficulty, tags: r.tags, category: 'Classique',
+      code: r.code, xml: pcnToXml(parsePcn(r.code), r.title), source: 'pcn', addedAt: t--, updatedAt: 0
+    });
+  }
+  setPref(flag, true);
+}

@@ -5,7 +5,7 @@ import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 import { Keyboard, frName, isBlack, type KeyMark } from './keyboard';
 import { midiInput } from './midiInput';
 import { playNote, unlockAudio } from './synth';
-import { pref, setPref } from './storage';
+import { pref, setPref, upref, setUpref } from './storage';
 import { h } from './ui';
 import {
   CHORDS, SCALES, STEP_PC, STEP_LETTERS, spName, spPc, spell, parseSp, scaleNotes, miniScoreXml, pick,
@@ -21,7 +21,7 @@ export const EXERCISES: ExerciseInfo[] = [
 ];
 
 interface Stats { total: number; best: number }
-export const getStats = (id: string) => pref<Stats>('stats.' + id, { total: 0, best: 0 });
+export const getStats = (id: string) => upref<Stats>('stats.' + id, { total: 0, best: 0 });
 
 interface Level { label: string }
 
@@ -119,7 +119,7 @@ abstract class Trainer<L extends Level> {
     const st = getStats(this.info.id);
     st.total++;
     st.best = Math.max(st.best, this.streak);
-    setPref('stats.' + this.info.id, st);
+    setUpref('stats.' + this.info.id, st);
     const secs = ((performance.now() - this.askedAt) / 1000).toFixed(1).replace('.', ',');
     this.feedback.textContent = `✔ ${msg}  ·  ${secs} s`;
     this.feedback.className = 'feedback ok';

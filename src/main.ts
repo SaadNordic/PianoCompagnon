@@ -1,7 +1,8 @@
 import './styles.css';
 import { registerSW } from 'virtual:pwa-register';
-import { getPiece, savePiece, deletePiece, pref, setPref } from './storage';
-import { REPERTOIRE } from './repertoire';
+import { getPiece } from './storage';
+import { seedRepertoire } from './repertoire';
+import { startAutoSync } from './sync';
 import { parsePcn, pcnToXml } from './codification';
 import { midiInput } from './midiInput';
 import { Player } from './player';
@@ -12,21 +13,6 @@ registerSW({ immediate: true });
 
 const app = document.getElementById('app')!;
 let player: { destroy(): void } | null = null;
-
-/** Répertoire de départ (domaine public), ajouté une fois ; remplace l'ancien morceau d'exemple. */
-async function seedRepertoire(): Promise<void> {
-  if (pref('seeded.rep1', false)) return;
-  await deletePiece('demo-ode');
-  let t = Date.now();
-  for (const r of REPERTOIRE) {
-    if (await getPiece(r.id)) continue;
-    await savePiece({
-      id: r.id, title: r.title, composer: r.composer, difficulty: r.difficulty, tags: r.tags, category: 'Classique',
-      code: r.code, xml: pcnToXml(parsePcn(r.code), r.title), source: 'pcn', addedAt: t--
-    });
-  }
-  setPref('seeded.rep1', true);
-}
 
 function route(): void {
   player?.destroy();
@@ -60,6 +46,7 @@ async function openPlayer(id: string): Promise<void> {
 window.addEventListener('hashchange', route);
 void (async () => {
   await seedRepertoire();
+  startAutoSync();
   void midiInput.start();
   route();
 })();

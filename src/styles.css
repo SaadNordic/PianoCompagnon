@@ -88,6 +88,12 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 .orig-box { display: flex; flex-direction: column; gap: 10px; }
 .orig-page { width: 100%; height: auto; background: #fff; border-radius: 6px; }
 
+/* compte */
+.account { border-radius: 999px; font-size: 0.85rem; padding: 6px 12px; }
+.account.ok { border-color: var(--ok); }
+.account.offline { border-color: #8a6d2b; }
+.account.error { border-color: var(--bad); }
+
 /* reconnaissance */
 .cam-btn { font-size: 1.4rem; padding: 0 18px; }
 .scan-body { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding-top: 18px; }

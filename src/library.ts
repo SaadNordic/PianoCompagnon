@@ -2,7 +2,10 @@
 
 import { h, toast, openModal, tabs } from './ui';
 import { importFile, ImportError } from './importers';
-import { listPieces, savePiece, deletePiece, newId, pref, setPref, type Piece } from './storage';
+import { listPieces, savePiece, deletePiece, newId, pref, setPref, getSession, listPieces as listIn, adoptLocalPieces, type Piece } from './storage';
+import { syncNow, onSyncState, onRemoteChange, login, logout, type SyncState } from './sync';
+import { DEFAULT_SERVER } from './api';
+import { seedRepertoire } from './repertoire';
 import { midiInput, statusLabel } from './midiInput';
 import { unlockAudio } from './synth';
 import { EXERCISES, getStats } from './learn';
@@ -25,6 +28,7 @@ const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(
 const stars = (n = 0) => '★'.repeat(n) + '☆'.repeat(5 - n);
 
 let unsubMidi: (() => void) | null = null;
+let unsubSync: (() => void)[] = [];
 
 export async function showLibrary(app: HTMLElement): Promise<void> {
   let pieces = await listPieces();
@@ -314,6 +318,81 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     return o;
   }));
 
+  // ---------- compte ----------
+  const accountBtn = h('button', { class: 'account' });
+  const paintAccount = (st: SyncState) => {
+    const s = getSession();
+    if (!s) { accountBtn.textContent = '👤 Se connecter'; accountBtn.className = 'account off'; return; }
+    const icon = st.state === 'syncing' ? '⟳' : st.state === 'ok' ? '✓' : st.state === 'offline' ? '⚡' : st.state === 'error' ? '⚠' : '';
+    accountBtn.textContent = `👤 ${s.user.name} ${icon}`;
+    accountBtn.className = 'account ' + st.state;
+    accountBtn.title = st.state === 'ok' ? 'Synchronisé' : st.state === 'offline' ? `Serveur injoignable (VPN ?) — ${st.pending} modification(s) en attente` : st.state === 'error' ? st.message : 'Synchronisation…';
+  };
+  unsubSync.forEach(f => f());
+  unsubSync = [onSyncState(paintAccount), onRemoteChange(() => void reload())];
+  const openAccount = () => {
+    const s = getSession();
+    if (!s) {
+      const server = h('input', { value: pref('server', DEFAULT_SERVER), autocomplete: 'off', inputmode: 'url' }) as HTMLInputElement;
+      const user = h('input', { autocomplete: 'username', autocapitalize: 'off' }) as HTMLInputElement;
+      const pass = h('input', { type: 'password', autocomplete: 'current-password' }) as HTMLInputElement;
+      const msg = h('p', { class: 'meta bad' });
+      const body = h('div', { class: 'form' }, [
+        h('p', { class: 'meta' }, 'Connectez-vous pour retrouver votre répertoire et votre progression sur tous vos appareils. Chaque personne a son propre compte. Activez le VPN pour joindre le serveur.'),
+        h('label', { class: 'field' }, [h('span', {}, 'Identifiant'), user]),
+        h('label', { class: 'field' }, [h('span', {}, 'Mot de passe'), pass]),
+        h('details', {}, [h('summary', { class: 'meta' }, 'Adresse du serveur'), h('label', { class: 'field' }, [server])]),
+        msg
+      ]);
+      const go = h('button', { class: 'primary', onclick: async () => {
+        msg.textContent = '';
+        go.setAttribute('disabled', '');
+        try {
+          setPref('server', server.value.trim());
+          await login(server.value.trim(), user.value.trim(), pass.value);
+          close();
+          const local = (await listIn('local')).filter(p => !p.id.startsWith('rep-'));
+          if (local.length && confirm(`Rattacher à votre compte les ${local.length} partition(s) déjà présentes sur ce téléphone ?`)) await adoptLocalPieces();
+          await seedRepertoire();
+          await reload();
+          toast(`Bonjour ${getSession()?.user.name} !`);
+          void syncNow();
+        } catch (e) {
+          msg.textContent = (e as Error).message;
+        } finally { go.removeAttribute('disabled'); }
+      } }, 'Se connecter');
+      const close = openModal('Connexion', body, [h('span', { class: 'spacer' }), h('button', { onclick: () => close() }, 'Annuler'), go]);
+      setTimeout(() => user.focus(), 50);
+      return;
+    }
+    const state = h('p', { class: 'meta' });
+    const un = onSyncState(st => {
+      state.textContent = st.state === 'ok' ? `Synchronisé à ${new Date(st.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}.`
+        : st.state === 'syncing' ? 'Synchronisation en cours…'
+        : st.state === 'offline' ? `Serveur injoignable (VPN activé ?). ${st.pending} modification(s) attendent d'être envoyées.`
+        : st.state === 'error' ? st.message : '';
+    });
+    const body = h('div', { class: 'form' }, [
+      h('h3', {}, s.user.name),
+      h('p', { class: 'meta' }, `Identifiant : ${s.user.login} · serveur ${s.server}`),
+      state,
+      h('p', { class: 'meta' }, 'Vos partitions, fiches, originaux et scores sont gardés sur ce téléphone et enregistrés sur le serveur dès qu\'il est joignable.')
+    ]);
+    const close = openModal('Mon compte', body, [
+      h('button', { class: 'danger', onclick: async () => {
+        if (!confirm('Se déconnecter ? Vos données restent sur le serveur et sur ce téléphone (invisibles tant que vous n\'êtes pas reconnecté).')) return;
+        await logout();
+        close();
+        await seedRepertoire();
+        await reload();
+      } }, 'Se déconnecter'),
+      h('span', { class: 'spacer' }),
+      h('button', { onclick: () => void syncNow() }, '⟳ Synchroniser'),
+      h('button', { class: 'primary', onclick: () => close() }, 'Fermer')
+    ], un);
+  };
+  accountBtn.addEventListener('click', openAccount);
+
   const chip = h('div', { class: 'chip' });
   unsubMidi?.();
   unsubMidi = midiInput.onStatus(s => {
@@ -326,6 +405,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       h('img', { src: 'icon.svg', alt: '', class: 'logo' }),
       h('div', {}, [h('h1', {}, 'Piano Compagnon'), h('div', { class: 'tag' }, 'La partition avance quand vous jouez juste.')]),
       chip,
+      accountBtn,
       h('button', { class: 'icon', title: 'Réglages', onclick: () => openSettings() }, '⚙')
     ]),
     h('div', { class: 'actions' }, [

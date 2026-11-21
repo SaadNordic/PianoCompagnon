@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Le serveur Piano Compagnon est joint en http sur le réseau interne (VPN). -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.1.240</domain>
+    </domain-config>
+</network-security-config>

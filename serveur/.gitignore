@@ -1,0 +1,4 @@
+.env
+piano.db
+piano.log
+__pycache__/
