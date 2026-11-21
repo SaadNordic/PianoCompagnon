@@ -38,7 +38,7 @@ export function setPref(key: string, value: unknown): void {
 
 // ---------- espace de l'utilisateur courant ----------
 
-export interface Session { server: string; token: string; user: { id: number; login: string; name: string } }
+export interface Session { server: string; token: string; user: { id: number; login: string; name: string; admin?: boolean } }
 export const getSession = () => pref<Session | null>('session', null);
 export const setSession = (s: Session | null) => setPref('session', s);
 /** Identifiant d'espace : « local » ou « u<id> ». */

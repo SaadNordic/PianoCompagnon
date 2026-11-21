@@ -4,7 +4,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { parsePcn, pcnToXml, normalizePcn } from './codification';
-import { pref, setPref } from './storage';
+import { pref, setPref, getSession } from './storage';
+import { api, ApiError } from './api';
 
 export const getApiKey = () => pref<string>('apiKey', '');
 export const setApiKey = (k: string) => setPref('apiKey', k.trim());
@@ -93,11 +94,44 @@ async function toBlocks(files: File[]): Promise<Anthropic.Beta.BetaContentBlockP
 
 // ---------- appel à Claude ----------
 
+/** Lecture par le serveur (clé Claude ND/NT gardée côté serveur) : envoi, puis suivi de l'avancement. */
+async function scanViaServer(blocks: Anthropic.Beta.BetaContentBlockParam[], onProgress: (p: ScanProgress) => void, signal: AbortSignal): Promise<{ text: string; truncated: boolean }> {
+  const files = blocks.map((b, i) => {
+    const src = (b as { source: { media_type: string; data: string } }).source;
+    return { name: `page${i + 1}`, type: src.media_type, data: src.data };
+  });
+  let job: string;
+  try {
+    job = (await api<{ job: string }>('POST', '/api/scan', { files }, 120000)).job;
+  } catch (e) {
+    throw new ScanError(e instanceof ApiError ? e.message : String(e));
+  }
+  onProgress({ phase: 'reading', measures: 0 });
+  for (;;) {
+    await new Promise(r => setTimeout(r, 2500));
+    if (signal.aborted) throw new ScanError('Lecture annulée.');
+    let st: { state: string; measures: number; error?: string; text?: string; truncated?: boolean };
+    try {
+      st = await api('GET', `/api/scan/${job}`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) continue; // coupure passagère : on réessaie
+      throw new ScanError(e instanceof ApiError ? e.message : String(e));
+    }
+    if (st.state === 'error') throw new ScanError(st.error || 'Erreur de lecture.');
+    if (st.state === 'done') return { text: st.text ?? '', truncated: !!st.truncated };
+    onProgress({ phase: st.measures ? 'writing' : 'reading', measures: st.measures });
+  }
+}
+
 export async function scanScore(files: File[], fallbackTitle: string, onProgress: (p: ScanProgress) => void, signal: AbortSignal): Promise<ScanResult> {
   const apiKey = getApiKey();
-  if (!apiKey) throw new ScanError('Aucune clé API Claude enregistrée.');
+  if (!getSession() && !apiKey) throw new ScanError('Connectez-vous à votre compte (VPN activé) pour lire une partition.');
   onProgress({ phase: 'prepare', measures: 0 });
   const blocks = await toBlocks(files);
+  if (getSession()) {
+    const r = await scanViaServer(blocks, onProgress, signal);
+    return finish(r.text, r.truncated, fallbackTitle);
+  }
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
   let text = '';
   let msg: Anthropic.Beta.BetaMessage;
@@ -130,15 +164,19 @@ export async function scanScore(files: File[], fallbackTitle: string, onProgress
   }
   if (msg.stop_reason === 'refusal') throw new ScanError('Claude a refusé de lire ce document.');
   const finalText = msg.content.filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === 'text').map(b => b.text).join('');
-  const parsed = parsePcn(finalText || text);
+  return finish(finalText || text, msg.stop_reason === 'max_tokens', fallbackTitle);
+}
+
+function finish(rawText: string, truncated: boolean, fallbackTitle: string): ScanResult {
+  const parsed = parsePcn(rawText);
   if (!parsed.measures || !parsed.notes.length) {
     throw new ScanError('Aucune mesure reconnue. La photo est-elle nette et bien cadrée ?');
   }
   const title = parsed.meta.title || fallbackTitle;
   const xml = pcnToXml(parsed, title);
-  const code = normalizePcn(finalText || text, title, parsed.meta.composer);
+  const code = normalizePcn(rawText, title, parsed.meta.composer);
   const warnings: string[] = [];
-  if (msg.stop_reason === 'max_tokens') warnings.push("La partition est très longue : la fin n'a pas pu être transcrite.");
+  if (truncated) warnings.push("La partition est très longue : la fin n'a pas pu être transcrite.");
   if (parsed.problems.length) warnings.push(`À vérifier : ${parsed.problems.slice(0, 5).join(' ; ')}${parsed.problems.length > 5 ? '…' : ''}`);
   return { title, composer: parsed.meta.composer, code, xml, measures: parsed.measures, warning: warnings.join(' ') || undefined };
 }

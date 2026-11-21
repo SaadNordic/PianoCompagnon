@@ -1,7 +1,7 @@
 @echo off
 title Piano Compagnon - Installation sur 192.168.1.240
 :: A lancer UNE fois depuis le PC. Cree la base, copie l'API, cree la tache planifiee et ouvre le port 8010.
-set SERVER=\192.168.1.240\c\PianoCompagnon\serveur
+set SERVER=\\192.168.1.240\c\PianoCompagnon\serveur
 choice /c ON /m "Installer Piano Compagnon sur le serveur 192.168.1.240 ? (O=Oui N=Non)"
 if errorlevel 2 goto fin
 

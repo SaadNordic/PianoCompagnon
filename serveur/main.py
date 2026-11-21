@@ -21,10 +21,15 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 VERSION = "1.0.0"
 HERE = Path(__file__).resolve().parent
+import sys  # noqa: E402
+if (HERE / "libs").is_dir():
+    sys.path.append(str(HERE / "libs"))  # paquets propres au piano (SDK Anthropic)
 
 
 def _load_env() -> None:
@@ -108,6 +113,14 @@ def init_db() -> None:
     with db() as cur:
         for stmt in SCHEMA:
             cur.execute(stmt)
+        if DB_KIND == "mssql":
+            cur.execute("IF COL_LENGTH('pc_users', 'admin') IS NULL ALTER TABLE pc_users ADD admin INT NOT NULL DEFAULT 0")
+    if DB_KIND != "mssql":
+        try:
+            with db() as cur:
+                cur.execute("ALTER TABLE pc_users ADD COLUMN admin INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # colonne déjà présente
 
 
 def now_ms() -> int:
@@ -122,11 +135,17 @@ def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
     return salt, dk.hex()
 
 
-def create_user(login: str, name: str, password: str) -> None:
+def create_user(login: str, name: str, password: str, admin: bool = False) -> None:
     salt, h = hash_password(password)
     with db() as cur:
-        cur.execute("INSERT INTO pc_users (login, name, salt, hash, created) VALUES (?, ?, ?, ?, ?)",
-                    (login.strip().lower(), name.strip(), salt, h, now_ms()))
+        cur.execute("INSERT INTO pc_users (login, name, salt, hash, created, admin) VALUES (?, ?, ?, ?, ?, ?)",
+                    (login.strip().lower(), name.strip(), salt, h, now_ms(), int(admin)))
+
+
+def user_count() -> int:
+    with db() as cur:
+        cur.execute("SELECT COUNT(*) FROM pc_users")
+        return int(cur.fetchone()[0])
 
 
 def set_password(login: str, password: str) -> bool:
@@ -190,11 +209,18 @@ def login(body: LoginIn):
             with _fail_lock:
                 _failures.setdefault(key, []).append(time.time())
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
-        token = secrets.token_urlsafe(32)
+    return _open_session(row[0], key, row[1])
+
+
+def _open_session(uid: int, login_name: str, name: str) -> dict:
+    token = secrets.token_urlsafe(32)
+    with db() as cur:
         cur.execute("INSERT INTO pc_sessions (token_hash, user_id, expires) VALUES (?, ?, ?)",
-                    (hashlib.sha256(token.encode()).hexdigest(), row[0], now_ms() + SESSION_DAYS * MS_DAY))
+                    (hashlib.sha256(token.encode()).hexdigest(), uid, now_ms() + SESSION_DAYS * MS_DAY))
         cur.execute("DELETE FROM pc_sessions WHERE expires < ?", (now_ms(),))
-    return {"token": token, "user": {"id": row[0], "login": key, "name": row[1]}}
+        cur.execute("SELECT admin FROM pc_users WHERE id = ?", (uid,))
+        admin = bool(cur.fetchone()[0])
+    return {"token": token, "user": {"id": uid, "login": login_name, "name": name, "admin": admin}}
 
 
 @app.post("/api/logout")
@@ -208,9 +234,80 @@ def logout(authorization: str = Header(default="")):
 @app.get("/api/me")
 def me(uid: int = Depends(current_user)):
     with db() as cur:
-        cur.execute("SELECT id, login, name FROM pc_users WHERE id = ?", (uid,))
+        cur.execute("SELECT id, login, name, admin FROM pc_users WHERE id = ?", (uid,))
         r = cur.fetchone()
-    return {"id": r[0], "login": r[1], "name": r[2]}
+    return {"id": r[0], "login": r[1], "name": r[2], "admin": bool(r[3])}
+
+
+# ---------------------------------------------------------------- comptes
+
+class NewUserIn(BaseModel):
+    login: str = Field(min_length=2, max_length=50, pattern=r"^[A-Za-z0-9._-]+$")
+    name: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=6, max_length=200)
+
+
+class PasswordIn(BaseModel):
+    password: str = Field(min_length=6, max_length=200)
+
+
+def admin_user(uid: int = Depends(current_user)) -> int:
+    with db() as cur:
+        cur.execute("SELECT admin FROM pc_users WHERE id = ?", (uid,))
+        if not cur.fetchone()[0]:
+            raise HTTPException(403, "Réservé à l'administrateur")
+    return uid
+
+
+@app.get("/api/setup")
+def setup_needed():
+    """Vrai tant qu'aucun compte n'existe : l'appli propose alors de créer le compte administrateur."""
+    return {"needsSetup": user_count() == 0}
+
+
+@app.post("/api/setup")
+def setup(body: NewUserIn):
+    with _fail_lock:  # évite deux créations simultanées
+        if user_count() > 0:
+            raise HTTPException(409, "Le premier compte existe déjà : connectez-vous")
+        create_user(body.login, body.name, body.password, admin=True)
+    with db() as cur:
+        cur.execute("SELECT id FROM pc_users WHERE login = ?", (body.login.strip().lower(),))
+        uid = cur.fetchone()[0]
+    return _open_session(uid, body.login.strip().lower(), body.name.strip())
+
+
+@app.get("/api/users")
+def list_users(_: int = Depends(admin_user)):
+    with db() as cur:
+        cur.execute("SELECT login, name, admin FROM pc_users ORDER BY login")
+        return [{"login": r[0], "name": r[1], "admin": bool(r[2])} for r in cur.fetchall()]
+
+
+@app.post("/api/users")
+def add_user(body: NewUserIn, _: int = Depends(admin_user)):
+    with db() as cur:
+        cur.execute("SELECT 1 FROM pc_users WHERE login = ?", (body.login.strip().lower(),))
+        if cur.fetchone():
+            raise HTTPException(409, "Cet identifiant existe déjà")
+    create_user(body.login, body.name, body.password)
+    return {"ok": True}
+
+
+@app.post("/api/users/{login_name}/password")
+def reset_password(login_name: str, body: PasswordIn, _: int = Depends(admin_user)):
+    if not set_password(login_name, body.password):
+        raise HTTPException(404, "Compte introuvable")
+    return {"ok": True}
+
+
+@app.post("/api/me/password")
+def change_my_password(body: PasswordIn, uid: int = Depends(current_user)):
+    with db() as cur:
+        cur.execute("SELECT login FROM pc_users WHERE id = ?", (uid,))
+        login_name = cur.fetchone()[0]
+    set_password(login_name, body.password)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- synchronisation
@@ -309,3 +406,127 @@ def get_originals(piece_id: str, uid: int = Depends(current_user)):
     with db() as cur:
         cur.execute("SELECT name, type, data FROM pc_originals WHERE user_id = ? AND piece_id = ? ORDER BY idx", (uid, piece_id))
         return {"files": [{"name": r[0], "type": r[1], "data": r[2]} for r in cur.fetchall()]}
+
+
+# ---------------------------------------------------------------- lecture PDF / photos par Claude
+
+SCAN_SYSTEM = """You transcribe piano sheet music (PDF pages or photos) into a compact text format.
+Read every page in order and transcribe ALL measures, both hands, as faithfully as possible.
+
+Output ONLY the transcription, no commentary, no markdown fence. Format:
+
+TITLE: <title, or empty>
+COMPOSER: <composer, or empty>
+TIME: <beats>/<beat-type>   (e.g. 4/4, 3/4, 6/8)
+KEY: <number of sharps as positive integer, flats as negative; 0 for C major / A minor>
+TEMPO: <quarter-note BPM; estimate from the tempo marking if no number, default 90>
+M1 | RH: <events> | LH: <events>
+M2 | RH: <events> | LH: <events>
+...
+
+Events are separated by spaces. Each event is <pitches>:<duration>
+- pitches: one note like C4, F#3, Bb5, E##4, Dbb3 (scientific pitch: middle C = C4), a chord joined with + like C4+E4+G4, or r for a rest.
+- Always write the actual sounding accidental of each note, taking the key signature and earlier accidentals in the measure into account (e.g. in G major write F#4, not F4).
+- duration in quarter notes: 4 whole, 3 dotted half, 2 half, 1.5 dotted quarter, 1 quarter, 0.75 dotted eighth, 0.5 eighth, 0.25 sixteenth; triplets as fractions like 1/3 or 2/3.
+- append ~ to an event whose notes are tied to the same notes in the next event (also across the bar line).
+- If one hand plays several simultaneous voices, separate the voices with & (each voice starts at the beginning of the measure and should fill it), e.g. RH: E5:1 D5:1 C5:2 & C4+E4:4
+- Each hand's events (each voice) must add up to the measure length; fill with rests where needed. For a pickup (anacrusis) measure, start it with a rest so that it has the full length.
+- Expand repeat signs and first/second endings into the order in which they are played; do not write repeat marks.
+- Ignore lyrics, fingerings, dynamics and pedal marks. Grace notes are omitted.
+- If a page is hard to read, give your best reading rather than skipping measures."""
+
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+class ScanIn(BaseModel):
+    files: list[OriginalIn]
+
+
+def _run_scan(job: dict, files: list[OriginalIn]) -> None:
+    try:
+        import anthropic
+    except ImportError:
+        job.update(state="error", error="SDK Anthropic absent du serveur")
+        return
+    blocks: list[dict] = []
+    for f in files:
+        if f.type == "application/pdf":
+            blocks.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": f.data}})
+        else:
+            blocks.append({"type": "image", "source": {"type": "base64", "media_type": f.type or "image/jpeg", "data": f.data}})
+    blocks.append({"type": "text", "text": "Transcribe this piano score."})
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    try:
+        with client.beta.messages.stream(
+            model="claude-opus-5-5",
+            max_tokens=64000,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",  # si le modèle refuse, l'API réessaie avec le modèle de secours
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
+            system=SCAN_SYSTEM,
+            messages=[{"role": "user", "content": blocks}],
+        ) as stream:
+            for text in stream.text_stream:
+                job["text"] += text
+                job["measures"] = sum(1 for line in job["text"].splitlines() if line.strip().upper().startswith("M") and "|" in line)
+            msg = stream.get_final_message()
+        if msg.stop_reason == "refusal":
+            job.update(state="error", error="Claude a refusé de lire ce document.")
+            return
+        job["text"] = "".join(b.text for b in msg.content if b.type == "text") or job["text"]
+        job.update(state="done", truncated=msg.stop_reason == "max_tokens")
+    except anthropic.AuthenticationError:
+        job.update(state="error", error="La clé Claude du serveur est refusée.")
+    except anthropic.PermissionDeniedError:
+        job.update(state="error", error="Accès refusé par Anthropic (crédit du compte ?).")
+    except anthropic.RateLimitError:
+        job.update(state="error", error="Trop de demandes en même temps : réessayez dans une minute.")
+    except anthropic.APIConnectionError:
+        job.update(state="error", error="Le serveur n'arrive pas à joindre Anthropic (accès Internet ?).")
+    except anthropic.APIStatusError as e:
+        job.update(state="error", error=f"Erreur Anthropic ({e.status_code}) : réessayez plus tard.")
+    except Exception as e:  # noqa: BLE001
+        job.update(state="error", error=f"Erreur : {e}")
+
+
+@app.post("/api/scan")
+def scan_start(body: ScanIn, uid: int = Depends(current_user)):
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise HTTPException(503, "Clé Claude non configurée sur le serveur")
+    if not body.files:
+        raise HTTPException(400, "Aucune page reçue")
+    with _jobs_lock:
+        for k in [k for k, j in _jobs.items() if j["started"] < time.time() - 3 * 3600]:
+            del _jobs[k]
+        jid = secrets.token_urlsafe(12)
+        job = {"uid": uid, "state": "running", "measures": 0, "text": "", "error": None, "truncated": False, "started": time.time()}
+        _jobs[jid] = job
+    threading.Thread(target=_run_scan, args=(job, body.files), daemon=True).start()
+    return {"job": jid}
+
+
+@app.get("/api/scan/{jid}")
+def scan_status(jid: str, uid: int = Depends(current_user)):
+    job = _jobs.get(jid)
+    if not job or job["uid"] != uid:
+        raise HTTPException(404, "Lecture introuvable (serveur redémarré ?)")
+    out = {"state": job["state"], "measures": job["measures"], "elapsed": int(time.time() - job["started"]), "error": job["error"]}
+    if job["state"] == "done":
+        out.update(text=job["text"], truncated=job["truncated"])
+    return out
+
+
+# ---------------------------------------------------------------- application web (navigateur du PC)
+# Le dossier ../web contient la version web de l'appli (npm run build). Monté en dernier :
+# les routes /api/... ci-dessus restent prioritaires.
+WEB_DIR = HERE.parent / "web"
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+else:
+    @app.get("/", response_class=HTMLResponse)
+    def accueil():
+        return ("<!doctype html><meta charset='utf-8'><title>Piano Compagnon</title>"
+                "<body style='font-family:system-ui;padding:40px'><h1>Piano Compagnon</h1>"
+                "<p>Le serveur fonctionne. Version web non installée.</p></body>")

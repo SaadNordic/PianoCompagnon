@@ -10,7 +10,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 NT_ENV = Path(r"C:\NordicTimber_WebPlatform\backend\.env.server")
-SERVER_DIR = Path(r"\192.168.1.240\c\PianoCompagnon\serveur")
+SERVER_DIR = Path(r"\\192.168.1.240\c\PianoCompagnon\serveur")
 
 
 def read_env(p: Path) -> dict:
@@ -29,6 +29,16 @@ def main() -> None:
         if not nt.get(k):
             sys.exit(f"[ERREUR] {k} absent de {NT_ENV}")
     env = f"DB_KIND=mssql\nDB_SERVER={nt['DB_SERVER']}\nDB_NAME=PianoCompagnon\nDB_USER={nt['DB_USER']}\nDB_PASS={nt['DB_PASS']}\n"
+    # clé Claude : celle des applis ND / NT (lecture des PDF et photos côté serveur)
+    key = ""
+    for src in (Path(r"C:\NordicTimber_WebPlatform\backend\.env"), Path(r"C:\ND_WebPlatform\backend\.env")):
+        if src.exists():
+            key = read_env(src).get("ANTHROPIC_API_KEY", "")
+            if key:
+                break
+    if key:
+        env += f"ANTHROPIC_API_KEY={key}\n"
+    print("Cle Claude : " + ("ajoutee" if key else "INTROUVABLE"))
     (HERE / ".env").write_text(env, encoding="utf-8")
     if SERVER_DIR.exists():
         (SERVER_DIR / ".env").write_text(env, encoding="utf-8")

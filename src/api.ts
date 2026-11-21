@@ -5,7 +5,10 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getSession } from './storage';
 
-export const DEFAULT_SERVER = 'http://192.168.1.240:8010';
+// Servie par le serveur lui-même (navigateur du PC) : même adresse ; sinon le serveur interne.
+export const DEFAULT_SERVER = !Capacitor.isNativePlatform() && location.port === '8010'
+  ? location.origin
+  : 'http://192.168.1.240:8010';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }

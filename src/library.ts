@@ -4,7 +4,8 @@ import { h, toast, openModal, tabs } from './ui';
 import { importFile, ImportError } from './importers';
 import { listPieces, savePiece, deletePiece, newId, pref, setPref, getSession, listPieces as listIn, adoptLocalPieces, type Piece } from './storage';
 import { syncNow, onSyncState, onRemoteChange, login, logout, type SyncState } from './sync';
-import { DEFAULT_SERVER } from './api';
+import { DEFAULT_SERVER, request, api } from './api';
+import { setSession } from './storage';
 import { seedRepertoire } from './repertoire';
 import { midiInput, statusLabel } from './midiInput';
 import { unlockAudio } from './synth';
@@ -81,7 +82,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
 
   // ---------- reconnaissance PDF / photos ----------
   const runScan = (scans: File[]) => {
-    if (!getApiKey()) { openSettings(() => runScan(scans)); return; }
+    if (!getSession() && !getApiKey()) { toast('Connectez-vous à votre compte (VPN activé) pour lire une partition.', 4000); openAccount(); return; }
     const controller = new AbortController();
     const status = h('div', { class: 'scan-status' }, 'Préparation des pages…');
     const elapsed = h('div', { class: 'scan-elapsed' });
@@ -133,7 +134,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     const key = h('input', { type: 'password', value: getApiKey(), placeholder: 'sk-ant-…', autocomplete: 'off' }) as HTMLInputElement;
     const body = h('div', { class: 'form' }, [
       h('h3', {}, 'Lecture des PDF et des photos'),
-      h('p', { class: 'meta' }, 'La reconnaissance des partitions utilise Claude (Anthropic). Il faut une clé API personnelle : créez-la sur console.anthropic.com, rubrique « API Keys », après avoir ajouté un peu de crédit. Coût indicatif : quelques dizaines de centimes par page.'),
+      h('p', { class: 'meta' }, 'Avec un compte, la lecture des PDF et photos passe par le serveur : aucune clé à saisir. Cette clé ne sert que pour utiliser l\'appli sans compte.'),
       h('label', { class: 'field' }, [h('span', {}, 'Clé API Claude'), key]),
       h('p', { class: 'meta' }, "La clé reste uniquement sur ce téléphone. Elle n'est envoyée qu'à Anthropic, au moment de lire une partition.")
     ]);
@@ -337,7 +338,25 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       const user = h('input', { autocomplete: 'username', autocapitalize: 'off' }) as HTMLInputElement;
       const pass = h('input', { type: 'password', autocomplete: 'current-password' }) as HTMLInputElement;
       const msg = h('p', { class: 'meta bad' });
+      const name = h('input', { autocomplete: 'name' }) as HTMLInputElement;
+      const nameField = h('label', { class: 'field', style: 'display:none' }, [h('span', {}, 'Votre prénom (affiché dans l\'appli)'), name]);
+      const intro = h('p', { class: 'meta' });
+      let setupMode = false;
+      const checkSetup = async () => {
+        try {
+          const r = await request<{ needsSetup: boolean }>(server.value.trim(), 'GET', '/api/setup');
+          setupMode = r.needsSetup;
+        } catch { setupMode = false; }
+        nameField.style.display = setupMode ? '' : 'none';
+        intro.textContent = setupMode
+          ? 'Premier lancement : créez le compte administrateur (le vôtre). Vous pourrez ensuite créer les autres comptes depuis « Mon compte ».'
+          : '';
+        go.textContent = setupMode ? 'Créer mon compte' : 'Se connecter';
+      };
+      server.addEventListener('change', () => void checkSetup());
       const body = h('div', { class: 'form' }, [
+        intro,
+        nameField,
         h('p', { class: 'meta' }, 'Connectez-vous pour retrouver votre répertoire et votre progression sur tous vos appareils. Chaque personne a son propre compte. Activez le VPN pour joindre le serveur.'),
         h('label', { class: 'field' }, [h('span', {}, 'Identifiant'), user]),
         h('label', { class: 'field' }, [h('span', {}, 'Mot de passe'), pass]),
@@ -349,7 +368,14 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
         go.setAttribute('disabled', '');
         try {
           setPref('server', server.value.trim());
-          await login(server.value.trim(), user.value.trim(), pass.value);
+          if (setupMode) {
+            if (pass.value.length < 6) throw new Error('Mot de passe : 6 caractères minimum.');
+            const r = await request<{ token: string; user: { id: number; login: string; name: string; admin?: boolean } }>(
+              server.value.trim(), 'POST', '/api/setup', { login: user.value.trim(), name: name.value.trim() || user.value.trim(), password: pass.value });
+            setSession({ server: server.value.trim().replace(/\/+$/, ''), token: r.token, user: r.user });
+          } else {
+            await login(server.value.trim(), user.value.trim(), pass.value);
+          }
           close();
           const local = (await listIn('local')).filter(p => !p.id.startsWith('rep-'));
           if (local.length && confirm(`Rattacher à votre compte les ${local.length} partition(s) déjà présentes sur ce téléphone ?`)) await adoptLocalPieces();
@@ -362,6 +388,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
         } finally { go.removeAttribute('disabled'); }
       } }, 'Se connecter');
       const close = openModal('Connexion', body, [h('span', { class: 'spacer' }), h('button', { onclick: () => close() }, 'Annuler'), go]);
+      void checkSetup();
       setTimeout(() => user.focus(), 50);
       return;
     }
@@ -372,11 +399,58 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
         : st.state === 'offline' ? `Serveur injoignable (VPN activé ?). ${st.pending} modification(s) attendent d'être envoyées.`
         : st.state === 'error' ? st.message : '';
     });
+    const newPass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: '6 caractères minimum' }) as HTMLInputElement;
+    const passMsg = h('p', { class: 'meta' });
+    const passBox = h('div', { class: 'row-field' }, [newPass, h('button', { onclick: async () => {
+      try {
+        if (newPass.value.length < 6) throw new Error('6 caractères minimum.');
+        await api('POST', '/api/me/password', { password: newPass.value });
+        newPass.value = ''; passMsg.className = 'meta ok'; passMsg.textContent = 'Mot de passe changé.';
+      } catch (e) { passMsg.className = 'meta bad'; passMsg.textContent = (e as Error).message; }
+    } }, 'Changer')]);
+    const adminBox = h('div', { class: 'form' });
+    if (s.user.admin) {
+      const list = h('div', { class: 'users' });
+      const refresh = async () => {
+        try {
+          const users = await api<{ login: string; name: string; admin: boolean }[]>('GET', '/api/users');
+          list.replaceChildren(...users.map(u => h('div', { class: 'user-row' }, [
+            h('span', {}, `${u.name} (${u.login})${u.admin ? ' — administrateur' : ''}`),
+            h('button', { onclick: async () => {
+              const p = prompt(`Nouveau mot de passe pour ${u.name} (6 caractères minimum) :`);
+              if (!p) return;
+              try { await api('POST', `/api/users/${encodeURIComponent(u.login)}/password`, { password: p }); toast('Mot de passe changé'); }
+              catch (e) { toast((e as Error).message, 4000); }
+            } }, 'Mot de passe…')
+          ])));
+        } catch (e) { list.textContent = (e as Error).message; }
+      };
+      const nl = h('input', { placeholder: 'identifiant (ex. adam)', autocapitalize: 'off' }) as HTMLInputElement;
+      const nn = h('input', { placeholder: 'prénom affiché' }) as HTMLInputElement;
+      const np = h('input', { type: 'password', placeholder: 'mot de passe (6 min.)', autocomplete: 'new-password' }) as HTMLInputElement;
+      const addMsg = h('p', { class: 'meta' });
+      adminBox.append(
+        h('h3', {}, 'Comptes'), list,
+        h('div', { class: 'add-user' }, [nl, nn, np, h('button', { class: 'primary', onclick: async () => {
+          try {
+            await api('POST', '/api/users', { login: nl.value.trim(), name: nn.value.trim() || nl.value.trim(), password: np.value });
+            addMsg.className = 'meta ok'; addMsg.textContent = `Compte « ${nl.value.trim()} » créé.`;
+            nl.value = nn.value = np.value = '';
+            void refresh();
+          } catch (e) { addMsg.className = 'meta bad'; addMsg.textContent = (e as Error).message.includes('pattern') ? 'Identifiant : lettres, chiffres, . - _ uniquement.' : (e as Error).message; }
+        } }, 'Créer le compte')]),
+        addMsg
+      );
+      void refresh();
+    }
     const body = h('div', { class: 'form' }, [
       h('h3', {}, s.user.name),
       h('p', { class: 'meta' }, `Identifiant : ${s.user.login} · serveur ${s.server}`),
       state,
-      h('p', { class: 'meta' }, 'Vos partitions, fiches, originaux et scores sont gardés sur ce téléphone et enregistrés sur le serveur dès qu\'il est joignable.')
+      h('p', { class: 'meta' }, 'Vos partitions, fiches, originaux et scores sont gardés sur cet appareil et enregistrés sur le serveur dès qu\'il est joignable.'),
+      h('label', { class: 'field' }, [h('span', {}, 'Changer mon mot de passe'), passBox]),
+      passMsg,
+      adminBox
     ]);
     const close = openModal('Mon compte', body, [
       h('button', { class: 'danger', onclick: async () => {
