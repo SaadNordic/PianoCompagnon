@@ -518,6 +518,29 @@ def scan_status(jid: str, uid: int = Depends(current_user)):
     return out
 
 
+# ---------------------------------------------------------------- catalogue (Mutopia Project)
+
+MUTOPIA = "https://www.mutopiaproject.org/ftp/"
+
+
+@app.get("/api/catalogue")
+def catalogue_fetch(path: str, uid: int = Depends(current_user)):
+    """Relais vers les fichiers MIDI libres du Mutopia Project (pour la version web, bloquée par le navigateur)."""
+    import base64
+    import re
+    import urllib.request
+    if ".." in path or not re.fullmatch(r"[A-Za-z0-9_./-]+\.mid", path):
+        raise HTTPException(400, "Chemin refusé")
+    try:
+        with urllib.request.urlopen(MUTOPIA + path, timeout=20) as r:
+            data = r.read(3_000_001)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Mutopia injoignable : {e}")
+    if len(data) > 3_000_000:
+        raise HTTPException(413, "Fichier trop gros")
+    return {"data": base64.b64encode(data).decode()}
+
+
 # ---------------------------------------------------------------- application web (navigateur du PC)
 # Le dossier ../web contient la version web de l'appli (npm run build). Monté en dernier :
 # les routes /api/... ci-dessus restent prioritaires.

@@ -7,6 +7,7 @@ import { syncNow, onSyncState, onRemoteChange, login, logout, type SyncState } f
 import { DEFAULT_SERVER, request, api } from './api';
 import { setSession } from './storage';
 import { seedRepertoire } from './repertoire';
+import { openCatalogue } from './catalogueUi';
 import { midiInput, statusLabel } from './midiInput';
 import { unlockAudio } from './synth';
 import { EXERCISES, getStats } from './learn';
@@ -485,6 +486,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     h('div', { class: 'actions' }, [
       h('button', { class: 'primary big-btn', onclick: () => fileInput.click() }, '＋ Importer (PDF, photo, MusicXML, MIDI)'),
       h('button', { class: 'cam-btn', title: 'Photographier une page de partition', onclick: () => cameraInput.click() }, '📷'),
+      h('button', { class: 'cat-btn', title: 'Catalogue de pièces célèbres', onclick: () => openCatalogue(() => void reload(), id => open({ id } as Piece)) }, '📚 Catalogue'),
       fileInput, cameraInput
     ]),
     h('div', { class: 'lib-title' }, [h('h2', {}, 'Mes partitions'), countEl]),
