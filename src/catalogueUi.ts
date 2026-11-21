@@ -6,6 +6,8 @@ import { importFile } from './importers';
 import { getPiece, savePiece, getSession, type Piece } from './storage';
 import { api } from './api';
 import { h, openModal, toast } from './ui';
+import { Midi } from '@tonejs/midi';
+import { playNote, stopAll, now, unlockAudio, loadPiano } from './synth';
 
 const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 const stars = (n: number) => '★'.repeat(n) + '☆'.repeat(5 - n);
@@ -17,8 +19,19 @@ function b64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-/** Télécharge le MIDI : en direct dans l'APK, par le serveur dans un navigateur. */
+const midiCache = new Map<string, Uint8Array>();
+
+/** Télécharge le MIDI (gardé en mémoire pour l'écoute puis l'ajout). */
 async function fetchMidi(item: CatalogueItem): Promise<Uint8Array> {
+  const cached = midiCache.get(item.id);
+  if (cached) return cached;
+  const bytes = await downloadMidi(item);
+  midiCache.set(item.id, bytes);
+  return bytes;
+}
+
+/** En direct dans l'APK, par le serveur dans un navigateur. */
+async function downloadMidi(item: CatalogueItem): Promise<Uint8Array> {
   if (Capacitor.isNativePlatform()) {
     const r = await CapacitorHttp.get({ url: MUTOPIA + item.path, responseType: 'arraybuffer', connectTimeout: 10000, readTimeout: 30000 });
     if (r.status !== 200) throw new Error(`Mutopia a répondu ${r.status}`);
@@ -31,6 +44,41 @@ async function fetchMidi(item: CatalogueItem): Promise<Uint8Array> {
   const r = await fetch(MUTOPIA + item.path);
   if (!r.ok) throw new Error(`Mutopia a répondu ${r.status}`);
   return new Uint8Array(await r.arrayBuffer());
+}
+
+// ---------- écoute d'un extrait ----------
+
+const EXCERPT_SEC = 30;
+let playing: { id: string; timer: number; onEnd: () => void } | null = null;
+
+export function stopPreview(): void {
+  if (!playing) return;
+  clearTimeout(playing.timer);
+  stopAll();
+  const end = playing.onEnd;
+  playing = null;
+  end();
+}
+
+/** Joue les 30 premières secondes de la pièce avec le son de piano. */
+export async function playPreview(item: CatalogueItem, onEnd: () => void): Promise<void> {
+  stopPreview();
+  unlockAudio();
+  const [bytes] = await Promise.all([fetchMidi(item), loadPiano()]);
+  const midi = new Midi(bytes);
+  const notes = midi.tracks.filter(t => t.channel !== 9).flatMap(t => t.notes);
+  if (!notes.length) throw new Error('aucune note');
+  const first = Math.min(...notes.map(n => n.time));
+  const t0 = now() + 0.15;
+  let last = 0;
+  for (const n of notes) {
+    const rel = n.time - first;
+    if (rel > EXCERPT_SEC) continue;
+    playNote(n.midi, Math.min(n.duration, EXCERPT_SEC + 1 - rel), Math.round(n.velocity * 127) || 80, t0 + rel);
+    last = Math.max(last, rel + Math.min(n.duration, 2));
+  }
+  const timer = window.setTimeout(() => stopPreview(), (Math.min(last, EXCERPT_SEC) + 1.5) * 1000);
+  playing = { id: item.id, timer, onEnd };
 }
 
 export async function addFromCatalogue(item: CatalogueItem): Promise<Piece> {
@@ -76,11 +124,26 @@ export function openCatalogue(onAdded: () => void, onOpen: (id: string) => void)
           toast(`Échec : ${(e as Error).message}`, 5000);
         }
       });
+      const listen = h('button', { class: 'listen', title: 'Écouter un extrait (30 s)' }, playing?.id === item.id ? '■' : '▶') as HTMLButtonElement;
+      listen.addEventListener('click', async () => {
+        if (playing?.id === item.id) { stopPreview(); return; }
+        listen.textContent = '…';
+        try {
+          await playPreview(item, () => { listen.textContent = '▶'; listen.classList.remove('on'); });
+          listen.textContent = '■';
+          listen.classList.add('on');
+          listEl.querySelectorAll('button.listen.on').forEach(b => { if (b !== listen) { b.textContent = '▶'; b.classList.remove('on'); } });
+        } catch (e) {
+          listen.textContent = '▶';
+          toast(`Écoute impossible : ${(e as Error).message}`, 4000);
+        }
+      });
       return h('div', { class: 'cat-row' }, [
         h('div', { class: 'cat-info' }, [
           h('div', { class: 'piece-title' }, item.title),
           h('div', { class: 'piece-sub' }, [h('span', { class: 'composer' }, item.composer), h('span', { class: 'diff', title: `Difficulté ${item.difficulty}/5` }, stars(item.difficulty))])
         ]),
+        listen,
         btn
       ]);
     }));
@@ -92,6 +155,6 @@ export function openCatalogue(onAdded: () => void, onOpen: (id: string) => void)
     h('p', { class: 'meta' }, `${CATALOGUE.length} pièces célèbres du domaine public (Bach, Mozart, Beethoven, Chopin, Satie, Debussy…), issues du Mutopia Project. « Ajouter » les copie dans votre répertoire.`),
     search, chips, listEl
   ]);
-  const close = openModal('📚 Catalogue', body, [h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: () => close() }, 'Fermer')]);
+  const close = openModal('📚 Catalogue', body, [h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: () => close() }, 'Fermer')], () => stopPreview());
   void render();
 }
