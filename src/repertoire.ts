@@ -2,6 +2,7 @@
 
 import { PCN_HEADER, parsePcn, pcnToXml } from './codification';
 import { ns, pref, setPref, getPiece, storePiece, removePieceLocal } from './storage';
+import { seedOud } from './oudRepertoire';
 
 export interface RepertoireItem { id: string; title: string; composer: string; difficulty: number; tags: string[]; code: string }
 
@@ -84,6 +85,7 @@ export const REPERTOIRE: RepertoireItem[] = [
 
 /** Ajoute le répertoire de départ dans l'espace courant (une fois par espace, sans synchroniser). */
 export async function seedRepertoire(): Promise<void> {
+  await seedOud();
   const flag = `seeded.rep1.${ns()}`;
   if (pref(flag, false) || (ns() === 'local' && pref('seeded.rep1', false))) return;
   if (ns() === 'local') await removePieceLocal('demo-ode'); // ancien morceau d'exemple

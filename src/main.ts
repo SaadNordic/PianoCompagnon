@@ -8,6 +8,8 @@ import { midiInput } from './midiInput';
 import { loadPiano, unlockAudio } from './synth';
 import { Player } from './player';
 import { createTrainer } from './learn';
+import { createOudTrainer } from './oudLearn';
+import { createTunerPage } from './oudTuner';
 import { showLibrary } from './library';
 import { checkForUpdate, isNative } from './updates';
 import { enableHorizontalScroll } from './ui';
@@ -25,11 +27,20 @@ function route(): void {
   const l = location.hash.match(/^#\/apprendre\/(.+)$/);
   if (m) void openPlayer(decodeURIComponent(m[1]));
   else if (l) openTrainer(l[1]);
+  else if (location.hash === '#/oud/accorder') openTuner();
   else void showLibrary(app);
 }
 
+function openTuner(): void {
+  const t = createTunerPage(() => { location.hash = '#/'; });
+  player = t;
+  app.replaceChildren(t.el);
+  t.mount();
+}
+
 function openTrainer(id: string): void {
-  const t = createTrainer(id, () => { location.hash = '#/'; });
+  const back = () => { location.hash = '#/'; };
+  const t = createTrainer(id, back) ?? createOudTrainer(id, back);
   if (!t) { location.hash = '#/'; return; }
   player = t;
   app.replaceChildren(t.el);

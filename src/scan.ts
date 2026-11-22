@@ -3,8 +3,8 @@
 // en MusicXML avec le même convertisseur que pour les fichiers MIDI.
 
 import Anthropic from '@anthropic-ai/sdk';
-import { parsePcn, pcnToXml, normalizePcn } from './codification';
-import { pref, setPref, getSession } from './storage';
+import { parsePcn, pcnToXml, normalizePcn, asOudPcn } from './codification';
+import { pref, setPref, getSession, type Domain } from './storage';
 import { api, ApiError } from './api';
 
 export const getApiKey = () => pref<string>('apiKey', '');
@@ -52,6 +52,36 @@ Events are separated by spaces. Each event is <pitches>:<duration>
 - Ignore lyrics, fingerings, dynamics and pedal marks. Grace notes are omitted.
 - If a page is hard to read, give your best reading rather than skipping measures.`;
 
+// Même texte que OUD_SYSTEM dans serveur/main.py
+const OUD_SYSTEM = `You transcribe oud sheet music (Arabic, Turkish or Western notation, PDF pages or photos) into a compact text format.
+Read every page in order and transcribe ALL measures of the melody as faithfully as possible.
+
+Output ONLY the transcription, no commentary, no markdown fence. Format:
+
+TITLE: <title, or empty>
+COMPOSER: <composer, or empty>
+INSTRUMENT: oud
+TIME: <beats>/<beat-type>   (e.g. 4/4, 3/4, 6/8, 10/8)
+KEY: 0
+TEMPO: <quarter-note BPM; estimate from the tempo marking if no number, default 90>
+M1 | RH: <events>
+M2 | RH: <events>
+...
+
+Events are separated by spaces. Each event is <pitch>:<duration>
+- pitch: one note exactly as WRITTEN on the staff, like C4, F#4, Bb4 (scientific pitch: the C on the first ledger line below the treble staff = C4), or r for a rest. Oud music is written one octave above its sound: never transpose it, keep the written octave.
+- Quarter tones: write d for half-flat and q for half-sharp, e.g. Ed4, Bd4, Ad4, Fq4, Cq5. A half-flat is usually a flat with a diagonal stroke through its stem, or a reversed flat. A half-sharp is usually a sharp with a single vertical line.
+- Three-quarter signs: a three-quarter sharp becomes the half-flat of the next note (F three-quarter sharp = Gd4), a three-quarter flat becomes the half-sharp of the previous note (E three-quarter flat = Dq4).
+- Turkish comma accidentals: write the nearest of natural, d, q, b or #.
+- Always write KEY: 0, and write the actual accidental of every note, taking the key signature (which may contain half-flats, e.g. Bd and Ed in Rast) and earlier accidentals in the measure into account.
+- duration in quarter notes: 4 whole, 3 dotted half, 2 half, 1.5 dotted quarter, 1 quarter, 0.75 dotted eighth, 0.5 eighth, 0.25 sixteenth; triplets as fractions like 1/3 or 2/3. A 10/8 measure lasts 5 quarter notes.
+- append ~ to an event whose note is tied to the same note in the next event (also across the bar line).
+- One single line: if several notes sound together, keep only the highest. If there are several staves, transcribe only the melody staff. Never use +, & or LH.
+- The events of each measure must add up to the measure length; fill with rests where needed. For a pickup (anacrusis) measure, start it with a rest so that it has the full length.
+- Expand repeat signs, first/second endings, D.C., D.S. and returns of the refrain (taslim) into the order in which they are played; do not write repeat marks.
+- Ignore lyrics, fingerings, dynamics, plectrum signs and ornaments; write a tremolo as its main note. Grace notes are omitted.
+- If a page is hard to read, give your best reading rather than skipping measures.`;
+
 // ---------- préparation des fichiers ----------
 
 function fileToBase64(blob: Blob): Promise<string> {
@@ -95,14 +125,14 @@ async function toBlocks(files: File[]): Promise<Anthropic.Beta.BetaContentBlockP
 // ---------- appel à Claude ----------
 
 /** Lecture par le serveur (clé Claude ND/NT gardée côté serveur) : envoi, puis suivi de l'avancement. */
-async function scanViaServer(blocks: Anthropic.Beta.BetaContentBlockParam[], onProgress: (p: ScanProgress) => void, signal: AbortSignal): Promise<{ text: string; truncated: boolean }> {
+async function scanViaServer(blocks: Anthropic.Beta.BetaContentBlockParam[], instrument: Domain, onProgress: (p: ScanProgress) => void, signal: AbortSignal): Promise<{ text: string; truncated: boolean }> {
   const files = blocks.map((b, i) => {
     const src = (b as { source: { media_type: string; data: string } }).source;
     return { name: `page${i + 1}`, type: src.media_type, data: src.data };
   });
   let job: string;
   try {
-    job = (await api<{ job: string }>('POST', '/api/scan', { files }, 120000)).job;
+    job = (await api<{ job: string }>('POST', '/api/scan', { files, instrument }, 120000)).job;
   } catch (e) {
     throw new ScanError(e instanceof ApiError ? e.message : String(e));
   }
@@ -123,14 +153,29 @@ async function scanViaServer(blocks: Anthropic.Beta.BetaContentBlockParam[], onP
   }
 }
 
-export async function scanScore(files: File[], fallbackTitle: string, onProgress: (p: ScanProgress) => void, signal: AbortSignal): Promise<ScanResult> {
+/**
+ * Un serveur pas encore mis à jour lirait un oud avec la consigne du piano et perdrait les quarts de ton :
+ * on le vérifie avant d'envoyer les pages (et avant toute lecture facturée).
+ */
+async function serverReadsOud(): Promise<boolean> {
+  try {
+    const r = await api<{ scanInstruments?: string[] }>('GET', '/api/ping');
+    return !!r.scanInstruments?.includes('oud');
+  } catch { return false; }
+}
+
+export async function scanScore(files: File[], fallbackTitle: string, onProgress: (p: ScanProgress) => void, signal: AbortSignal, instrument: Domain = 'piano'): Promise<ScanResult> {
   const apiKey = getApiKey();
   if (!getSession() && !apiKey) throw new ScanError('Connectez-vous à votre compte (VPN activé) pour lire une partition.');
   onProgress({ phase: 'prepare', measures: 0 });
+  const viaServer = !!getSession() && (instrument === 'piano' || await serverReadsOud());
+  if (!viaServer && !apiKey) {
+    throw new ScanError('Lecture du oud impossible : le serveur est injoignable (VPN ?) ou pas encore mis à jour (serveur\\deploy_serveur.bat).');
+  }
   const blocks = await toBlocks(files);
-  if (getSession()) {
-    const r = await scanViaServer(blocks, onProgress, signal);
-    return finish(r.text, r.truncated, fallbackTitle);
+  if (viaServer) {
+    const r = await scanViaServer(blocks, instrument, onProgress, signal);
+    return finish(r.text, r.truncated, fallbackTitle, instrument);
   }
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
   let text = '';
@@ -143,8 +188,8 @@ export async function scanScore(files: File[], fallbackTitle: string, onProgress
       fallbacks: 'default', // si le modèle refuse, l'API réessaie avec le modèle de secours
       thinking: { type: 'adaptive' },
       output_config: { effort: 'high' },
-      system: SYSTEM,
-      messages: [{ role: 'user', content: [...blocks, { type: 'text', text: 'Transcribe this piano score.' }] }]
+      system: instrument === 'oud' ? OUD_SYSTEM : SYSTEM,
+      messages: [{ role: 'user', content: [...blocks, { type: 'text', text: instrument === 'oud' ? 'Transcribe this oud score.' : 'Transcribe this piano score.' }] }]
     }, { signal });
     onProgress({ phase: 'reading', measures: 0 });
     stream.on('text', delta => {
@@ -164,10 +209,11 @@ export async function scanScore(files: File[], fallbackTitle: string, onProgress
   }
   if (msg.stop_reason === 'refusal') throw new ScanError('Claude a refusé de lire ce document.');
   const finalText = msg.content.filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === 'text').map(b => b.text).join('');
-  return finish(finalText || text, msg.stop_reason === 'max_tokens', fallbackTitle);
+  return finish(finalText || text, msg.stop_reason === 'max_tokens', fallbackTitle, instrument);
 }
 
-function finish(rawText: string, truncated: boolean, fallbackTitle: string): ScanResult {
+function finish(answer: string, truncated: boolean, fallbackTitle: string, instrument: Domain = 'piano'): ScanResult {
+  const rawText = instrument === 'oud' ? asOudPcn(answer) : answer;
   const parsed = parsePcn(rawText);
   if (!parsed.measures || !parsed.notes.length) {
     throw new ScanError('Aucune mesure reconnue. La photo est-elle nette et bien cadrée ?');

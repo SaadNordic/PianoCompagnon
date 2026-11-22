@@ -27,6 +27,12 @@ function ac(): AudioContext {
   return ctx;
 }
 
+/** Contexte audio et sortie communs à toute l'appli (son du oud, écoute du micro). */
+export function audioOut(): { ctx: AudioContext; out: GainNode } {
+  const c = ac();
+  return { ctx: c, out: master! };
+}
+
 export function setVolume(v: number): void {
   ac();
   master!.gain.value = v;

@@ -3,7 +3,8 @@
 import { h, toast, openModal, tabs, openSheet, menuRow } from './ui';
 import { checkForUpdate, installUpdate, onUpdateState, versionLabel, isNative, type UpdateState } from './updates';
 import { importFile, ImportError } from './importers';
-import { listPieces, savePiece, deletePiece, newId, pref, setPref, getSession, listPieces as listIn, adoptLocalPieces, type Piece } from './storage';
+import { listPieces, savePiece, deletePiece, newId, pref, setPref, getSession, listPieces as listIn, adoptLocalPieces, getDomain, setDomain, type Domain, type Piece } from './storage';
+import { OUD_EXERCISES } from './oudLearn';
 import { syncNow, onSyncState, onRemoteChange, login, logout, type SyncState } from './sync';
 import { DEFAULT_SERVER, request, api } from './api';
 import { setSession } from './storage';
@@ -13,7 +14,7 @@ import { midiInput, statusLabel } from './midiInput';
 import { unlockAudio } from './synth';
 import { EXERCISES, getStats } from './learn';
 import { isScanFile, scanScore, getApiKey, setApiKey, ScanError, type ScanProgress } from './scan';
-import { parsePcn, pcnToXml, normalizePcn, PCN_HELP } from './codification';
+import { parsePcn, pcnToXml, normalizePcn, asOudPcn, PCN_HELP } from './codification';
 import { saveOriginals, renderOriginals } from './originals';
 
 type SortKey = 'recent' | 'added' | 'title' | 'composer' | 'difficulty' | 'plays';
@@ -35,16 +36,23 @@ let unsubSync: (() => void)[] = [];
 let unsubUpdate: (() => void) | null = null;
 
 export async function showLibrary(app: HTMLElement): Promise<void> {
-  let pieces = await listPieces();
+  const domain = getDomain();
+  const isOud = domain === 'oud';
+  const filterKey = isOud ? 'lib.filter.oud' : 'lib.filter';
+  // collections vides au départ : ces œuvres sont protégées, chacun y importe ses propres partitions
+  const collections = isOud ? ['Oum Kalthoum', 'Abdel Wahab'] : [];
+  /** Chaque domaine a sa propre bibliothèque. */
+  const loadPieces = async () => (await listPieces()).filter(p => (p.instrument === 'oud') === isOud);
+  let pieces = await loadPieces();
   let query = '';
-  let filter = pref<string>('lib.filter', ALL);
+  let filter = pref<string>(filterKey, ALL);
   let sort = pref<SortKey>('lib.sort', 'recent');
 
   const listEl = h('div', { class: 'pieces' });
   const chipsEl = h('div', { class: 'filters' });
   const countEl = h('span', { class: 'count' });
 
-  const reload = async () => { pieces = await listPieces(); renderChips(); renderList(); };
+  const reload = async () => { pieces = await loadPieces(); renderChips(); renderList(); };
 
   // ---------- import ----------
   const fileInput = h('input', { type: 'file', multiple: true, style: 'display:none' }) as HTMLInputElement;
@@ -68,9 +76,11 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     for (const f of files) {
       try {
         const imp = await importFile(f);
+        const code = isOud && imp.code ? asOudPcn(imp.code) : imp.code;
         const p: Piece = {
-          id: newId(), title: imp.title, xml: imp.xml, source: imp.source, addedAt: Date.now(),
-          composer: imp.composer, code: imp.code, category: filter !== ALL && filter !== FAV && filter !== NONE ? filter : undefined
+          id: newId(), title: imp.title, xml: code ? pcnToXml(parsePcn(code), imp.title) : imp.xml, source: imp.source, addedAt: Date.now(),
+          composer: imp.composer, code, category: filter !== ALL && filter !== FAV && filter !== NONE ? filter : undefined,
+          instrument: isOud ? 'oud' : undefined
         };
         await savePiece(p);
         added.push(p);
@@ -108,11 +118,12 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       : p.phase === 'reading' || !p.measures ? 'Claude lit la partition…'
       : `Transcription : ${p.measures} mesure${p.measures > 1 ? 's' : ''}…`;
     const fallbackTitle = scans[0].name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ');
-    scanScore(scans, fallbackTitle, p => { status.textContent = label(p); }, controller.signal)
+    scanScore(scans, fallbackTitle, p => { status.textContent = label(p); }, controller.signal, domain)
       .then(async r => {
         clearInterval(timer);
         const p: Piece = {
           id: newId(), title: r.title, composer: r.composer, xml: r.xml, code: r.code, hasOriginal: true, source: 'scan', addedAt: Date.now(),
+          instrument: isOud ? 'oud' : undefined,
           category: filter !== ALL && filter !== FAV && filter !== NONE ? filter : undefined,
           note: r.warning
         };
@@ -156,7 +167,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
 
   // ---------- fiche d'une partition ----------
   const editPiece = (p: Piece, isNew = false) => {
-    const categories = [...new Set(pieces.map(x => x.category).filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b, 'fr'));
+    const categories = [...new Set([...collections, ...pieces.map(x => x.category).filter(Boolean) as string[]])].sort((a, b) => a.localeCompare(b, 'fr'));
     const field = (label: string, input: HTMLElement) => h('label', { class: 'field' }, [h('span', {}, label), input]);
     const title = h('input', { value: p.title }) as HTMLInputElement;
     const composer = h('input', { value: p.composer ?? '', placeholder: 'ex. Chopin', list: 'dl-composers' }) as HTMLInputElement;
@@ -254,12 +265,12 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
 
   // ---------- filtres et liste ----------
   const renderChips = () => {
-    const cats = [...new Set(pieces.map(p => p.category).filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b, 'fr'));
+    const cats = [...new Set([...collections, ...pieces.map(p => p.category).filter(Boolean) as string[]])].sort((a, b) => a.localeCompare(b, 'fr'));
     const hasNone = pieces.some(p => !p.category) && cats.length > 0;
     const all = [ALL, ...(pieces.some(p => p.favorite) ? [FAV] : []), ...cats, ...(hasNone ? [NONE] : [])];
     if (!all.includes(filter)) filter = ALL;
     chipsEl.replaceChildren(...all.map(c => h('button', { class: 'fchip' + (c === filter ? ' on' : ''), onclick: () => {
-      filter = c; setPref('lib.filter', c); renderChips(); renderList();
+      filter = c; setPref(filterKey, c); renderChips(); renderList();
     } }, c)));
   };
 
@@ -283,10 +294,18 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     };
     shown = shown.sort(cmp[sort]);
     countEl.textContent = `${shown.length} / ${pieces.length}`;
-    if (!pieces.length) {
+    if (!pieces.length && !collections.includes(filter)) {
       listEl.replaceChildren(h('div', { class: 'empty' }, [
         h('p', {}, 'Aucune partition pour le moment.'),
         h('button', { class: 'primary', onclick: () => openAdd() }, '＋ Ajouter une partition')
+      ]));
+      return;
+    }
+    if (!shown.length && !q && collections.includes(filter)) {
+      // collection personnelle encore vide : ce qu'on ajoute ici y est classé automatiquement
+      listEl.replaceChildren(h('div', { class: 'empty' }, [
+        h('p', {}, `Collection « ${filter} » : ajoutez vos partitions (PDF, photo, MusicXML…). Elles restent dans votre compte.`),
+        h('button', { class: 'primary', onclick: () => openAdd() }, '＋ Ajouter à cette collection')
       ]));
       return;
     }
@@ -396,7 +415,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
             await login(server.value.trim(), user.value.trim(), pass.value);
           }
           close();
-          const local = (await listIn('local')).filter(p => !p.id.startsWith('rep-'));
+          const local = (await listIn('local')).filter(p => !p.id.startsWith('rep-') && !/^oud-(rast|bayati|nahawand|kurd|hijaz|saba)$/.test(p.id));
           if (local.length && confirm(`Rattacher à votre compte les ${local.length} partition(s) déjà présentes sur ce téléphone ?`)) await adoptLocalPieces();
           await seedRepertoire();
           await reload();
@@ -488,14 +507,22 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
   // ---------- état du piano ----------
   const chip = h('div', { class: 'chip' });
   unsubMidi?.();
-  unsubMidi = midiInput.onStatus(s => {
+  if (isOud) {
+    unsubMidi = null;
+    chip.className = 'chip ok';
+    chip.textContent = '🎤 Écoute au micro';
+    chip.title = 'Le oud est écouté au micro du téléphone';
+  } else unsubMidi = midiInput.onStatus(s => {
     chip.className = 'chip ' + (s.state === 'connected' ? 'ok' : 'warn');
     chip.textContent = (s.state === 'connected' ? '🎹 ' : '⚠ ') + statusLabel(s);
     chip.title = statusLabel(s);
   });
 
   // ---------- ajouter ----------
-  const openAdd = () => openSheet('Ajouter une partition', [
+  const openAdd = () => openSheet('Ajouter une partition', isOud ? [
+    { icon: '📁', label: 'Importer un fichier', desc: 'PDF, photo, MusicXML, MIDI ou codification PCN', onClick: () => fileInput.click() },
+    { icon: '📷', label: 'Photographier une page', desc: 'Claude lit la mélodie, quarts de ton compris', onClick: () => cameraInput.click() }
+  ] : [
     { icon: '📁', label: 'Importer un fichier', desc: 'PDF, photo, MusicXML, MIDI ou codification PCN', onClick: () => fileInput.click() },
     { icon: '📷', label: 'Photographier une page', desc: 'Claude lit la partition note par note', onClick: () => cameraInput.click() },
     { icon: '📚', label: 'Catalogue de pièces célèbres', desc: 'Bach, Beethoven, Chopin… (domaine public)', onClick: () => openCatalogue(() => void reload(), id => open({ id } as Piece)) }
@@ -503,7 +530,12 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
 
   // ---------- aide ----------
   const openHelp = () => {
-    const body = h('div', { class: 'help-body', html: `
+    const body = h('div', { class: 'help-body', html: isOud ? `
+      <p><b>Écoute :</b> pas de câble. Posez le téléphone à une trentaine de centimètres du oud, dans une pièce calme, et autorisez le micro à la première utilisation. Le micro ne sert que sur les écrans de jeu et d'accordage, et rien n'est enregistré.</p>
+      <p><b>Accorder :</b> onglet <b>Accorder</b>. Pincez une corde : l'aiguille indique s'il faut tendre ou détendre. Touchez une corde à l'écran pour entendre sa note. L'accord se choisit en bas de l'écran.</p>
+      <p><b>Pendant le jeu :</b> la partition n'avance que sur la bonne note. Le manche en bas montre où la jouer, le grave en haut. La partition est écrite une octave au-dessus du son réel, comme d'habitude pour le oud. On joue une note à la fois.</p>
+      <p><b>Ajouter une partition :</b> bouton <b>＋ Ajouter</b>. PDF et photos sont lus par Claude, qui relève la mélodie et les quarts de ton. Une lecture peut contenir des erreurs : écoutez-la avec ▶ et comparez à l'original.</p>
+      <p><b>Quarts de ton :</b> Mi½♭ et Si½♭ sont distingués de Mi et Si. Dans une codification PCN, écrivez <code>Ed4</code> pour Mi½♭, <code>Bd4</code> pour Si½♭, <code>Fq4</code> pour Fa½♯.</p>` : `
       <p><b>Branchement :</b> câble USB-C (téléphone) vers USB-B (prise carrée à l'arrière du piano). Le voyant en haut passe au vert avec le nom du piano.</p>
       <p><b>Ajouter une partition :</b> bouton <b>＋ Ajouter</b> en bas. Formats acceptés : PDF et photos (lus par Claude), codification PCN (<code>.pcn</code>), MusicXML (<code>.musicxml</code>, <code>.xml</code>, <code>.mxl</code>) et MIDI (<code>.mid</code>). Plusieurs photos importées ensemble = les pages d'un même morceau. Une partition lue par photo peut contenir des erreurs : écoutez-la avec ▶ pour vérifier.</p>
       <p><b>Où trouver des partitions :</b> le Catalogue intégré, MuseScore (exporter en MusicXML), IMSLP / Mutopia (domaine public), ou tout fichier MIDI.</p>
@@ -583,8 +615,10 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     ]),
     apprendre: h('section', {}, [
       h('h2', {}, 'Apprendre'),
-      h('p', { class: 'meta section-intro' }, 'Exercices courts au piano : lecture de notes, accords, gammes, oreille.'),
-      h('div', { class: 'learn-grid' }, EXERCISES.map(e => {
+      h('p', { class: 'meta section-intro' }, isOud
+        ? 'Exercices courts au oud, écoutés au micro : cordes, notes, maqamat, oreille.'
+        : 'Exercices courts au piano : lecture de notes, accords, gammes, oreille.'),
+      h('div', { class: 'learn-grid' }, (isOud ? OUD_EXERCISES : EXERCISES).map(e => {
         const st = getStats(e.id);
         return h('button', { class: 'learn-card', onclick: () => goLearn(e.id) }, [
           h('div', { class: 'lc-icon' }, e.icon),
@@ -601,7 +635,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       h('div', { class: 'mlist' }, [
         updRow,
         menuRow({ icon: '⚙', label: 'Réglages', desc: 'Clé de lecture des PDF et photos (sans compte)', onClick: () => openSettings() }),
-        menuRow({ icon: '❓', label: 'Aide', desc: 'Brancher le piano, trouver des partitions, jouer', onClick: openHelp })
+        menuRow({ icon: '❓', label: 'Aide', desc: isOud ? 'Micro, accordage, jeu, quarts de ton' : 'Brancher le piano, trouver des partitions, jouer', onClick: openHelp })
       ])
     ])
   };
@@ -610,6 +644,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     h('button', { class: 'nav-item', 'data-s': s, onclick: () => show(s) }, [h('span', { class: 'nav-icon' }, [icon, extra ?? null]), h('span', {}, label)]);
   const nav = h('nav', { class: 'bottom-nav' }, [
     navBtn('partitions', '🎼', 'Partitions'),
+    isOud ? h('button', { class: 'nav-item', onclick: () => { unlockAudio(); location.hash = '#/oud/accorder'; } }, [h('span', { class: 'nav-icon' }, '🎚'), h('span', {}, 'Accorder')]) : null,
     navBtn('apprendre', '🎓', 'Apprendre'),
     h('button', { class: 'nav-item nav-add', onclick: openAdd }, [h('span', { class: 'nav-icon' }, '＋'), h('span', {}, 'Ajouter')]),
     navBtn('plus', '☰', 'Plus', plusBadge)
@@ -627,6 +662,12 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
       h('div', { class: 'home-name' }, [h('h1', {}, 'Piano Compagnon'), h('div', { class: 'tag' }, 'La partition avance quand vous jouez juste.')]),
       chip
     ]),
+    h('div', { class: 'domain-tabs', role: 'tablist' }, ([['piano', '🎹 Piano'], ['oud', 'عود  Oud']] as [Domain, string][]).map(([d, label]) =>
+      h('button', { class: 'domain-tab' + (d === domain ? ' on' : ''), role: 'tab', onclick: () => {
+        if (d === domain) return;
+        setDomain(d);
+        void showLibrary(app);
+      } }, label))),
     body,
     nav,
     fileInput, cameraInput

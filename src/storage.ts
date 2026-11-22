@@ -8,6 +8,7 @@ export interface Piece {
   title: string;
   xml: string;
   source: 'musicxml' | 'midi' | 'demo' | 'scan' | 'pcn';
+  instrument?: 'oud'; // absent = piano
   code?: string; // codification PCN (référence quand elle existe)
   hasOriginal?: boolean; // photo(s) / PDF d'origine conservés
   addedAt: number;
@@ -35,6 +36,11 @@ export function pref<T>(key: string, fallback: T): T {
 export function setPref(key: string, value: unknown): void {
   try { localStorage.setItem('pc.' + key, JSON.stringify(value)); } catch { /* ignoré */ }
 }
+
+/** Domaine affiché : piano ou oud. */
+export type Domain = 'piano' | 'oud';
+export const getDomain = () => pref<Domain>('domain', 'piano');
+export const setDomain = (d: Domain) => setPref('domain', d);
 
 // ---------- espace de l'utilisateur courant ----------
 

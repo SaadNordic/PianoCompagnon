@@ -14,29 +14,39 @@
 // Durée en noires : 4 ronde, 2 blanche, 1 noire, 0.5 croche, 0.25 double, 1.5 noire pointée, 1/3 triolet.
 // ~ en fin d'événement = lié à la note suivante. Plusieurs voix d'une même main séparées par &.
 
-import { notesToMusicXml, type RawNote, type Hand } from './musicxml';
+import { notesToMusicXml, type RawNote, type Hand, type Spelling } from './musicxml';
 
 export const PCN_HEADER = 'PIANO-COMPAGNON 1';
 
 export const PCN_HELP = `Une ligne par mesure :  M3 | RH: <main droite> | LH: <main gauche>
 Événement = hauteurs:durée, séparés par des espaces.
   Hauteur : C4 = do central (Do3), D4 ré, E4 mi, F4 fa, G4 sol, A4 la, B4 si ; # dièse, b bémol (F#4, Bb3).
+  Quarts de ton (oud) : d demi-bémol, q demi-dièse (Ed4 = Mi½♭, Bd4 = Si½♭, Fq4 = Fa½♯).
   Accord : C4+E4+G4      Silence : r
   Durée en noires : 4 ronde · 2 blanche · 1 noire · 0.5 croche · 0.25 double · 1.5 noire pointée · 1/3 triolet
   ~ à la fin = lié à la note suivante (ex. C5:2~)
   Deux voix dans une main : séparées par &  (ex. RH: E5:1 D5:1 C5:2 & C4+E4:4)
-En-tête : TITLE, COMPOSER, TIME (ex. 3/4), KEY (dièses > 0, bémols < 0), TEMPO (noires/min).`;
+En-tête : TITLE, COMPOSER, TIME (ex. 3/4), KEY (dièses > 0, bémols < 0), TEMPO (noires/min), INSTRUMENT: oud (une seule portée, RH).`;
 
-export interface PcnMeta { title: string; composer?: string; beats: number; beatType: number; fifths: number; bpm: number }
+export interface PcnMeta { title: string; composer?: string; beats: number; beatType: number; fifths: number; bpm: number; instrument?: 'oud' }
 export interface PcnParsed { notes: RawNote[]; meta: PcnMeta; measures: number; problems: string[] }
 
 const PC: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 
 function parsePitch(s: string): number | null {
-  const m = s.match(/^([A-Ga-g])(##|#|bb|b|n)?(-?\d)$/);
+  // d = demi-bémol, q = demi-dièse (quarts de ton des maqamat : Ed4, Bd4, Fq4)
+  const m = s.match(/^([A-Ga-g])(##|#|bb|b|d|q|n)?(-?\d)$/);
   if (!m) return null;
-  const alter = { '##': 2, '#': 1, bb: -2, b: -1, n: 0 }[m[2] ?? 'n'] ?? 0;
+  const alter = { '##': 2, '#': 1, bb: -2, b: -1, d: -0.5, q: 0.5, n: 0 }[m[2] ?? 'n'] ?? 0;
   return (Number(m[3]) + 1) * 12 + PC[m[1].toUpperCase()] + alter;
+}
+
+/** Orthographe écrite d'une note (Eb reste Eb) : indispensable aux maqamat, qui mêlent dièses et bémols. */
+function writtenSpelling(s: string): Spelling | undefined {
+  const m = s.match(/^([A-Ga-g])(##|#|bb|b|d|q|n)?(-?\d)$/);
+  if (!m) return undefined;
+  const alter = { '##': 2, '#': 1, bb: -2, b: -1, d: -0.5, q: 0.5, n: 0 }[m[2] ?? 'n'] ?? 0;
+  return { step: m[1].toUpperCase(), alter, octave: Number(m[3]) };
 }
 
 function parseDur(s: string): number {
@@ -59,6 +69,7 @@ export function parsePcn(text: string): PcnParsed {
   const fifths = Math.max(-7, Math.min(7, parseInt(header('KEY'), 10) || 0));
   const bpm = Math.min(240, Math.max(30, parseInt(header('TEMPO'), 10) || 90));
   const measureLen = (beats * 4) / beatType;
+  const instrument = header('INSTRUMENT').toLowerCase() === 'oud' ? 'oud' as const : undefined;
   const notes: RawNote[] = [];
   const problems: string[] = [];
   let measures = 0;
@@ -91,7 +102,7 @@ export function parsePcn(text: string): PcnParsed {
               const prev = pending.get(midi);
               let n: RawNote;
               if (prev && Math.abs(prev.start + prev.dur - t) < 0.01) { prev.dur += dur; n = prev; }
-              else { n = { midi, start: t, dur, hand, voice: vi }; notes.push(n); }
+              else { n = { midi, start: t, dur, hand, voice: vi, spelling: instrument ? writtenSpelling(ps) : undefined }; notes.push(n); }
               if (tied) next.set(midi, n);
             }
           }
@@ -107,12 +118,23 @@ export function parsePcn(text: string): PcnParsed {
       });
     }
   }
-  return { notes, meta: { title: header('TITLE'), composer: header('COMPOSER') || undefined, beats, beatType, fifths, bpm }, measures, problems };
+  return { notes, meta: { title: header('TITLE'), composer: header('COMPOSER') || undefined, beats, beatType, fifths, bpm, instrument }, measures, problems };
+}
+
+/** Marque une codification comme écrite pour le oud (une seule portée). */
+export function asOudPcn(text: string): string {
+  if (/^INSTRUMENT\s*:/im.test(text)) return text.replace(/^INSTRUMENT\s*:.*$/im, 'INSTRUMENT: oud');
+  const lines = text.split('\n');
+  const at = lines[0]?.startsWith('PIANO-COMPAGNON') ? 1 : 0;
+  lines.splice(at, 0, 'INSTRUMENT: oud');
+  return lines.join('\n');
 }
 
 /** Codification -> MusicXML (pour l'affichage). */
 export function pcnToXml(parsed: PcnParsed, fallbackTitle: string): string {
-  return notesToMusicXml(parsed.notes, { ...parsed.meta, title: parsed.meta.title || fallbackTitle, exact: true });
+  return notesToMusicXml(parsed.notes, {
+    ...parsed.meta, title: parsed.meta.title || fallbackTitle, exact: true, single: parsed.meta.instrument === 'oud'
+  });
 }
 
 /** Met le texte au propre : en-tête de format, titre et compositeur à jour. */

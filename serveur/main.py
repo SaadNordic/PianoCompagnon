@@ -18,6 +18,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -200,7 +201,8 @@ class LoginIn(BaseModel):
 @app.get("/api/ping")
 def ping():
     running = sum(1 for j in list(_jobs.values()) if j["state"] == "running")
-    return {"ok": True, "app": "piano-compagnon", "version": VERSION, "scansRunning": running}
+    return {"ok": True, "app": "piano-compagnon", "version": VERSION, "scansRunning": running,
+            "scanInstruments": ["piano", "oud"]}
 
 
 @app.post("/api/login")
@@ -444,12 +446,43 @@ Events are separated by spaces. Each event is <pitches>:<duration>
 - Ignore lyrics, fingerings, dynamics and pedal marks. Grace notes are omitted.
 - If a page is hard to read, give your best reading rather than skipping measures."""
 
+# Même texte que OUD_SYSTEM dans src/scan.ts
+OUD_SYSTEM = """You transcribe oud sheet music (Arabic, Turkish or Western notation, PDF pages or photos) into a compact text format.
+Read every page in order and transcribe ALL measures of the melody as faithfully as possible.
+
+Output ONLY the transcription, no commentary, no markdown fence. Format:
+
+TITLE: <title, or empty>
+COMPOSER: <composer, or empty>
+INSTRUMENT: oud
+TIME: <beats>/<beat-type>   (e.g. 4/4, 3/4, 6/8, 10/8)
+KEY: 0
+TEMPO: <quarter-note BPM; estimate from the tempo marking if no number, default 90>
+M1 | RH: <events>
+M2 | RH: <events>
+...
+
+Events are separated by spaces. Each event is <pitch>:<duration>
+- pitch: one note exactly as WRITTEN on the staff, like C4, F#4, Bb4 (scientific pitch: the C on the first ledger line below the treble staff = C4), or r for a rest. Oud music is written one octave above its sound: never transpose it, keep the written octave.
+- Quarter tones: write d for half-flat and q for half-sharp, e.g. Ed4, Bd4, Ad4, Fq4, Cq5. A half-flat is usually a flat with a diagonal stroke through its stem, or a reversed flat. A half-sharp is usually a sharp with a single vertical line.
+- Three-quarter signs: a three-quarter sharp becomes the half-flat of the next note (F three-quarter sharp = Gd4), a three-quarter flat becomes the half-sharp of the previous note (E three-quarter flat = Dq4).
+- Turkish comma accidentals: write the nearest of natural, d, q, b or #.
+- Always write KEY: 0, and write the actual accidental of every note, taking the key signature (which may contain half-flats, e.g. Bd and Ed in Rast) and earlier accidentals in the measure into account.
+- duration in quarter notes: 4 whole, 3 dotted half, 2 half, 1.5 dotted quarter, 1 quarter, 0.75 dotted eighth, 0.5 eighth, 0.25 sixteenth; triplets as fractions like 1/3 or 2/3. A 10/8 measure lasts 5 quarter notes.
+- append ~ to an event whose note is tied to the same note in the next event (also across the bar line).
+- One single line: if several notes sound together, keep only the highest. If there are several staves, transcribe only the melody staff. Never use +, & or LH.
+- The events of each measure must add up to the measure length; fill with rests where needed. For a pickup (anacrusis) measure, start it with a rest so that it has the full length.
+- Expand repeat signs, first/second endings, D.C., D.S. and returns of the refrain (taslim) into the order in which they are played; do not write repeat marks.
+- Ignore lyrics, fingerings, dynamics, plectrum signs and ornaments; write a tremolo as its main note. Grace notes are omitted.
+- If a page is hard to read, give your best reading rather than skipping measures."""
+
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 
 class ScanIn(BaseModel):
     files: list[OriginalIn]
+    instrument: Literal["piano", "oud"] = "piano"
 
 
 def _save_job(jid: str, job: dict) -> None:
@@ -480,7 +513,8 @@ def _scan(jid: str, job: dict, files: list[OriginalIn]) -> None:
             blocks.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": f.data}})
         else:
             blocks.append({"type": "image", "source": {"type": "base64", "media_type": f.type or "image/jpeg", "data": f.data}})
-    blocks.append({"type": "text", "text": "Transcribe this piano score."})
+    oud = job.get("instrument") == "oud"
+    blocks.append({"type": "text", "text": "Transcribe this oud score." if oud else "Transcribe this piano score."})
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     try:
         with client.beta.messages.stream(
@@ -490,7 +524,7 @@ def _scan(jid: str, job: dict, files: list[OriginalIn]) -> None:
             fallbacks="default",  # si le modèle refuse, l'API réessaie avec le modèle de secours
             thinking={"type": "adaptive"},
             output_config={"effort": "high"},
-            system=SCAN_SYSTEM,
+            system=OUD_SYSTEM if oud else SCAN_SYSTEM,
             messages=[{"role": "user", "content": blocks}],
         ) as stream:
             last_saved = 0
@@ -530,7 +564,8 @@ def scan_start(body: ScanIn, uid: int = Depends(current_user)):
         for k in [k for k, j in _jobs.items() if j["started"] < time.time() - 3 * 3600]:
             del _jobs[k]
         jid = secrets.token_urlsafe(12)
-        job = {"uid": uid, "state": "running", "measures": 0, "text": "", "error": None, "truncated": False, "started": time.time()}
+        job = {"uid": uid, "state": "running", "measures": 0, "text": "", "error": None, "truncated": False,
+               "started": time.time(), "instrument": body.instrument}
         _jobs[jid] = job
     with db() as cur:
         cur.execute("DELETE FROM pc_scans WHERE started < ?", (now_ms() - 30 * MS_DAY,))

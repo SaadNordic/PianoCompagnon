@@ -7,6 +7,9 @@ import { playNote, now, unlockAudio, loadPiano, soundOut } from './synth';
 import { savePiece, pref, setPref, type Piece } from './storage';
 import { h, toast, openModal } from './ui';
 import { renderOriginals } from './originals';
+import { micInput, micBanner, micLabel } from './mic';
+import { OudNeck, WRITTEN_OFFSET, oudName, playOud, positionLabel } from './oud';
+import { createTuner } from './oudTuner';
 
 type HandSel = 'both' | 'R' | 'L';
 type Part = 'R' | 'L' | 'acc'; // acc = partie jouée par l'appli (autre instrument)
@@ -20,7 +23,9 @@ export class Player {
   readonly el: HTMLElement;
   private osmd!: OpenSheetMusicDisplay;
   private scoreEl: HTMLDivElement;
-  private kb: Keyboard;
+  private kb: Keyboard | OudNeck;
+  private readonly oud: boolean; // oud : on écoute au micro au lieu du MIDI
+  private tuning = false; // accordeur ouvert : les notes entendues ne font pas avancer la partition
   private steps: Step[] = [];
   private idx = 0;
   private cursorIdx = 0;
@@ -51,13 +56,41 @@ export class Player {
   private measureCount = 0;
 
   constructor(private piece: Piece, private onBack: () => void) {
+    this.oud = piece.instrument === 'oud';
+    if (this.oud) this.hands = 'R'; // une seule ligne à jouer
     this.scoreEl = h('div', { class: 'score' }) as HTMLDivElement;
-    this.kb = new Keyboard(
-      m => { unlockAudio(); playNote(m, 0.9, 85); midiInput.noteOn(m, 85); },
-      m => midiInput.noteOff(m)
-    );
-    this.kb.setLabels(pref('labels', 'c'));
-    this.el = h('div', { class: 'player' }, [this.topBar(), this.settingsPanel(), this.scoreEl, this.infoBar(), this.kb.el]);
+    if (this.oud) {
+      this.kb = new OudNeck(p => { unlockAudio(); playOud(p, 0.9); micInput.press(p); });
+    } else {
+      const kb = new Keyboard(
+        m => { unlockAudio(); playNote(m, 0.9, 85); midiInput.noteOn(m, 85); },
+        m => midiInput.noteOff(m)
+      );
+      kb.setLabels(pref('labels', 'c'));
+      this.kb = kb;
+    }
+    const banner = this.oud ? micBanner() : null;
+    if (banner) this.unsub.push(banner.destroy);
+    this.el = h('div', { class: 'player' }, [this.topBar(), this.settingsPanel(), banner?.el, this.scoreEl, this.infoBar(), this.kb.el]);
+  }
+
+  private sound(m: number, dur: number, vel: number, at = 0): void {
+    if (this.oud) playOud(m, dur, vel, at);
+    else playNote(m, dur, vel, at);
+  }
+
+  /** Accordeur par-dessus la partition : on garde sa place dans le morceau. */
+  private openTuner(): void {
+    this.stopListen();
+    this.tuning = true;
+    const t = createTuner(() => (this.kb as OudNeck).refresh());
+    const close = openModal('Accorder le oud', t.el, [h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: () => close() }, 'Fermer')], () => {
+      t.destroy();
+      this.tuning = false;
+      micInput.mute(400);
+      this.enterStep(this.idx, false);
+    });
+    t.mount();
   }
 
   // ---------- interface ----------
@@ -79,7 +112,7 @@ export class Player {
     return h('header', { class: 'bar' }, [
       h('button', { class: 'icon', title: 'Bibliothèque', onclick: () => this.onBack() }, '←'),
       h('div', { class: 'title' }, this.piece.title),
-      seg,
+      this.oud ? null : seg,
       this.listenBtn,
       this.loopBtn,
       this.midiDot,
@@ -121,18 +154,19 @@ export class Player {
     };
     this.settingsEl = h('div', { class: 'settings' }, [
       action('⏮', 'Recommencer au début', () => this.restart()),
+      this.oud ? action('🎚', 'Accorder le oud', () => this.openTuner()) : null,
       this.piece.hasOriginal ? action('📄', 'Voir la partition originale', () => this.showOriginal()) : null,
       action('←', 'Retour à la bibliothèque', () => this.onBack()),
       h('div', { class: 'menu-sep' }),
       h('label', {}, ["Vitesse d'écoute", select(this.speed, [[0.5, '50 %'], [0.75, '75 %'], [1, '100 %'], [1.25, '125 %']], v => {
         this.speed = Number(v); setPref('speed', this.speed);
       })]),
-      h('label', {}, ['Son de l’appli', select(soundOut(), [['auto', 'Piano numérique s’il est branché'], ['device', 'Toujours cet appareil']], v => {
+      this.oud ? null : h('label', {}, ['Son de l’appli', select(soundOut(), [['auto', 'Piano numérique s’il est branché'], ['device', 'Toujours cet appareil']], v => {
         setPref('soundOut', v);
       })]),
-      h('label', {}, ['Noms sur le clavier', select(this.kb.labels, [['c', 'Do seulement'], ['all', 'Toutes les notes'], ['none', 'Aucun']], v => {
-        setPref('labels', v); this.kb.setLabels(v as 'none' | 'c' | 'all'); this.enterStep(this.idx, false);
-      })]),
+      this.kb instanceof Keyboard ? h('label', {}, ['Noms sur le clavier', select(this.kb.labels, [['c', 'Do seulement'], ['all', 'Toutes les notes'], ['none', 'Aucun']], v => {
+        setPref('labels', v); (this.kb as Keyboard).setLabels(v as 'none' | 'c' | 'all'); this.enterStep(this.idx, false);
+      })]) : null,
       h('label', {}, ['Taille de la partition', h('div', { class: 'row' }, [
         h('button', { class: 'icon', onclick: () => this.setZoom(this.zoom - 0.1) }, '−'),
         h('button', { class: 'icon', onclick: () => this.setZoom(this.zoom + 0.1) }, '+')
@@ -185,14 +219,27 @@ export class Player {
 
     this.osmd.cursor.show();
     this.scoreEl.addEventListener('click', e => this.onScoreClick(e));
-    this.unsub.push(
-      midiInput.onNoteOn(m => this.onNoteOn(m)),
-      midiInput.onNoteOff(m => this.kb.setHeld(m, false)),
-      midiInput.onStatus(s => {
-        this.midiDot.classList.toggle('on', s.state === 'connected');
-        this.midiDot.title = statusLabel(s);
-      })
-    );
+    if (this.oud) {
+      this.unsub.push(
+        micInput.onNoteOn(p => this.onNoteOn(p)),
+        micInput.onNoteOff(p => this.kb.setHeld(p, false)),
+        micInput.onState(s => {
+          this.midiDot.classList.toggle('on', s === 'on');
+          this.midiDot.title = micLabel(s);
+        }),
+        () => micInput.stop()
+      );
+      void micInput.start();
+    } else {
+      this.unsub.push(
+        midiInput.onNoteOn(m => this.onNoteOn(m)),
+        midiInput.onNoteOff(m => this.kb.setHeld(m, false)),
+        midiInput.onStatus(s => {
+          this.midiDot.classList.toggle('on', s.state === 'connected');
+          this.midiDot.title = statusLabel(s);
+        })
+      );
+    }
     window.addEventListener('resize', this.onResize);
     void this.keepAwake();
     this.piece.lastPlayedAt = Date.now();
@@ -247,8 +294,14 @@ export class Player {
           const tie = n.NoteTie;
           if (tie && tie.StartNote !== n) continue; // suite d'une liaison : ne se rejoue pas
           const wholes = tie ? tie.Notes.reduce((s, x) => s + x.Length.RealValue, 0) : n.Length.RealValue;
-          notes.push({ midi: n.halfTone + 12, part: partOf(n), wholes, note: n });
+          // partition de oud : écrite une octave au-dessus du son réel
+          notes.push({ midi: n.halfTone + 12 - (this.oud ? WRITTEN_OFFSET : 0), part: partOf(n), wholes, note: n });
         }
+      }
+      if (this.oud) {
+        // le micro suit une note à la fois : la plus aiguë de la portée du haut (la mélodie)
+        const top = notes.filter(x => x.part === 'R').reduce<StepNote | null>((b, x) => (!b || x.midi > b.midi ? x : b), null);
+        for (const x of notes) x.part = x === top ? 'R' : 'acc';
       }
       this.steps.push({ ts: it.CurrentEnrolledTimestamp.RealValue, measure: it.CurrentMeasureIndex, notes });
       this.measureCount = Math.max(this.measureCount, it.CurrentMeasureIndex + 1);
@@ -298,6 +351,7 @@ export class Player {
     const step = this.steps[i];
     this.expected = new Set(step.notes.filter(n => this.practiced(n.part)).map(n => n.midi));
     this.satisfied = new Set();
+    if (this.oud) micInput.setTargets([...this.expected]);
     this.autoNotes = step.notes.filter(n => !this.practiced(n.part));
     this.autoPlayedAt = -1;
 
@@ -333,6 +387,7 @@ export class Player {
   private playAuto(): void {
     if (this.autoPlayedAt === this.idx) return;
     this.autoPlayedAt = this.idx;
+    if (this.oud) return; // pas d'accompagnement : le micro l'entendrait comme une note jouée
     const spw = this.secPerWhole();
     for (const n of this.autoNotes) playNote(n.midi, n.wholes * spw, 70);
   }
@@ -345,6 +400,7 @@ export class Player {
   // ---------- jeu ----------
 
   private onNoteOn(m: number): void {
+    if (this.tuning) return;
     this.kb.setHeld(m, true);
     if (this.listening || this.finished || !this.steps.length) return;
     if (this.pending) this.pending.run(); // l'élève joue avant la fin de l'accompagnement : on rattrape
@@ -386,6 +442,12 @@ export class Player {
     const step = this.steps[this.idx];
     if (!step) return;
     const want = step.notes.filter(n => this.practiced(n.part));
+    if (this.oud) {
+      const note = want.map(n => `${oudName(n.midi)} (${positionLabel(n.midi)})`).join(' ');
+      this.infoEl.textContent = `Mesure ${step.measure + 1}/${this.measureCount}` + (note ? `  —  ${note}` : '');
+      this.statsEl.textContent = this.wrong ? `${this.wrong} fausse${this.wrong > 1 ? 's' : ''} note${this.wrong > 1 ? 's' : ''}` : '';
+      return;
+    }
     const fmt = (p: Part) => want.filter(n => n.part === p).sort((a, b) => b.midi - a.midi).map(n => frName(n.midi)).join(' ');
     const r = fmt('R'), l = fmt('L');
     const parts = [r && `MD : ${r}`, l && `MG : ${l}`].filter(Boolean).join('  ·  ');
@@ -495,7 +557,7 @@ export class Player {
     this.listening = true;
     this.listenBtn.textContent = '■';
     this.listenBtn.classList.add('on');
-    await loadPiano(); // le vrai son de piano dès la première note
+    if (!this.oud) await loadPiano(); // le vrai son de piano dès la première note
     if (!this.listening) return;
     const startIdx = this.finished ? 0 : this.idx;
     this.finished = false;
@@ -510,7 +572,7 @@ export class Player {
         const s = this.steps[next];
         const at = t0 + (s.ts - base) * spw;
         if (at > horizon) break;
-        for (const n of s.notes) playNote(n.midi, n.wholes * spw, 75, at);
+        for (const n of s.notes) this.sound(n.midi, n.wholes * spw, 75, at);
         const i = next;
         setTimeout(() => {
           if (!this.listening) return;
@@ -545,6 +607,7 @@ export class Player {
     this.listenEnd = 0;
     this.listenBtn.textContent = '▶';
     this.listenBtn.classList.remove('on');
+    if (this.oud) micInput.mute(600); // la dernière note résonne encore
     this.enterStep(Math.min(this.idx, this.steps.length - 1), false);
   }
 }

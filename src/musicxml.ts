@@ -9,7 +9,10 @@ export interface RawNote {
   dur: number; // en noires
   hand?: Hand;
   voice?: number; // 0 = voix principale ; 1, 2… = voix supplémentaires de la même main
+  spelling?: Spelling; // orthographe imposée (oud) ; sinon déduite de l'armure
 }
+
+export interface Spelling { step: string; alter: number; octave: number }
 
 export interface ScoreMeta {
   title: string;
@@ -18,6 +21,16 @@ export interface ScoreMeta {
   bpm?: number;
   fifths?: number; // armure : nb de dièses (>0) ou bémols (<0)
   exact?: boolean; // durées exactes (codification) : pas de recalage « jeu humain »
+  single?: boolean; // une seule portée en clé de sol (oud)
+}
+
+const NATURALS = new Set([0, 2, 4, 5, 7, 9, 11]);
+
+/** Quart de ton : demi-bémol de la note naturelle au-dessus, sinon demi-dièse de celle en dessous. */
+function spellQuarter(p: number): Spelling {
+  const up = Math.ceil(p);
+  const base = NATURALS.has(up % 12) ? up : Math.floor(p);
+  return { step: SHARP_NAMES[base % 12][0], alter: p - base, octave: Math.floor(base / 12) - 1 };
 }
 
 const DIV = 4; // divisions par noire : grille à la double croche
@@ -33,7 +46,7 @@ const VALUES: [number, string, boolean][] = [
   [4, 'quarter', false], [3, 'eighth', true], [2, 'eighth', false], [1, '16th', false]
 ];
 
-interface Ev { start: number; len: number; pitches: number[] | null }
+interface Ev { start: number; len: number; pitches: number[] | null; spell?: Map<number, Spelling> }
 
 function esc(s: string): string {
   return s.replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]!));
@@ -46,14 +59,15 @@ export function splitHands(notes: RawNote[]): RawNote[] {
 
 function buildEvents(notes: RawNote[], exact = false): Ev[] {
   // regroupe par attaque quantifiée, puis comble les trous avec des silences
-  const byOnset = new Map<number, { pitches: Set<number>; end: number }>();
+  const byOnset = new Map<number, { pitches: Set<number>; end: number; spell: Map<number, Spelling> }>();
   for (const n of notes) {
     const s = Math.max(0, Math.round(n.start * DIV));
     let e = Math.round((n.start + n.dur) * DIV);
     if (e <= s) e = s + 1;
-    const g = byOnset.get(s);
+    let g = byOnset.get(s);
     if (g) { g.pitches.add(n.midi); g.end = Math.max(g.end, e); }
-    else byOnset.set(s, { pitches: new Set([n.midi]), end: e });
+    else byOnset.set(s, g = { pitches: new Set([n.midi]), end: e, spell: new Map() });
+    if (n.spelling) g.spell.set(n.midi, n.spelling);
   }
   const onsets = [...byOnset.keys()].sort((a, b) => a - b);
   const evs: Ev[] = [];
@@ -70,7 +84,7 @@ function buildEvents(notes: RawNote[], exact = false): Ev[] {
       const beat = Math.ceil(end / DIV) * DIV;
       if (beat - end <= tolerance) end = beat;
     }
-    evs.push({ start: s, len: end - s, pitches: [...g.pitches].sort((a, b) => a - b) });
+    evs.push({ start: s, len: end - s, pitches: [...g.pitches].sort((a, b) => a - b), spell: g.spell });
     t = end;
   });
   return evs;
@@ -93,11 +107,11 @@ export function notesToMusicXml(input: RawNote[], meta: ScoreMeta): string {
   const fifths = meta.fifths ?? 0;
   const names = fifths < 0 ? FLAT_NAMES : SHARP_NAMES;
   const L = Math.round((beats * 4 * DIV) / beatType); // longueur de mesure en doubles croches
-  const notes = splitHands(input);
+  const notes = meta.single ? input.map(n => ({ ...n, hand: 'R' as Hand })) : splitHands(input);
   // une « piste » par main et par voix
   interface Lane { si: number; voice: number; events: Ev[] }
   const lanes: Lane[] = [];
-  (['R', 'L'] as Hand[]).forEach((hand, si) => {
+  ((meta.single ? ['R'] : ['R', 'L']) as Hand[]).forEach((hand, si) => {
     const handNotes = notes.filter(n => n.hand === hand);
     const voices = [...new Set(handNotes.map(n => n.voice ?? 0))].sort((x, y) => x - y);
     if (!voices.length) voices.push(0);
@@ -137,13 +151,15 @@ export function notesToMusicXml(input: RawNote[], meta: ScoreMeta): string {
             );
           } else {
             ev.pitches.forEach((p, ci) => {
-              const [step, alter] = names[p % 12];
-              const octave = Math.floor(p / 12) - 1;
+              const sp = ev.spell?.get(p) ?? (Number.isInteger(p) ? null : spellQuarter(p));
+              const [step, alter] = sp ? [sp.step, sp.alter] : names[p % 12];
+              const octave = sp ? sp.octave : Math.floor(p / 12) - 1;
+              const accidental = sp && Math.abs(sp.alter) === 0.5 ? `<accidental>${sp.alter < 0 ? 'quarter-flat' : 'quarter-sharp'}</accidental>` : '';
               const ties = (tieStop ? '<tie type="stop"/>' : '') + (tieStart ? '<tie type="start"/>' : '');
               const tied = (tieStop ? '<tied type="stop"/>' : '') + (tieStart ? '<tied type="start"/>' : '');
               out[m][li].push(
                 `<note>${ci > 0 ? '<chord/>' : ''}<pitch><step>${step}</step>${alter ? `<alter>${alter}</alter>` : ''}<octave>${octave}</octave></pitch>` +
-                `<duration>${d}</duration>${ties}<voice>${voice}</voice><type>${type}</type>${dot ? '<dot/>' : ''}` +
+                `<duration>${d}</duration>${ties}<voice>${voice}</voice><type>${type}</type>${dot ? '<dot/>' : ''}${accidental}` +
                 `<staff>${staff}</staff>${tied ? `<notations>${tied}</notations>` : ''}</note>`
               );
             });
@@ -158,8 +174,10 @@ export function notesToMusicXml(input: RawNote[], meta: ScoreMeta): string {
     let attrs = '';
     if (i === 0) {
       attrs = `<attributes><divisions>${DIV}</divisions><key><fifths>${fifths}</fifths></key>` +
-        `<time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time><staves>2</staves>` +
-        `<clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`;
+        `<time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time>` +
+        (meta.single
+          ? `<clef><sign>G</sign><line>2</line></clef></attributes>`
+          : `<staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`);
       if (meta.bpm) {
         attrs += `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit>` +
           `<per-minute>${Math.round(meta.bpm)}</per-minute></metronome></direction-type><sound tempo="${Math.round(meta.bpm)}"/></direction>`;
@@ -171,7 +189,7 @@ export function notesToMusicXml(input: RawNote[], meta: ScoreMeta): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
 <score-partwise version="4.0"><work><work-title>${esc(meta.title)}</work-title></work>
-<part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+<part-list><score-part id="P1"><part-name>${meta.single ? 'Oud' : 'Piano'}</part-name></score-part></part-list>
 <part id="P1">${measures.join('\n')}</part></score-partwise>`;
 }
 
