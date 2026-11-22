@@ -10,7 +10,6 @@ import { renderOriginals } from './originals';
 import { micInput, micBanner, micLabel } from './mic';
 import { OudNeck, WRITTEN_OFFSET, loadOud, oudName, playOud, positionLabel } from './oud';
 import { createTuner } from './oudTuner';
-import { stripXmlInvalid } from './musicxml';
 
 type HandSel = 'both' | 'R' | 'L';
 type Part = 'R' | 'L' | 'acc'; // acc = partie jouée par l'appli (autre instrument)
@@ -200,8 +199,7 @@ export class Player {
     this.osmd.EngravingRules.PageTopMargin = 1;
     this.scoreEl.innerHTML = '<div class="loading">Chargement de la partition…</div>';
     try {
-      // les morceaux déjà enregistrés peuvent contenir un caractère nul venu du MIDI
-      await this.osmd.load(stripXmlInvalid(this.piece.xml), this.piece.title);
+      await this.osmd.load(this.piece.xml, this.piece.title);
       this.scoreEl.querySelector('.loading')?.remove();
       this.osmd.Zoom = this.zoom;
       this.osmd.render();
