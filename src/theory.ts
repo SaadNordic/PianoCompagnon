@@ -56,6 +56,47 @@ export function scaleNotes(root: Sp, type: ScaleType): Sp[] {
   return spell(root, [0, 1, 2, 3, 4, 5, 6, 0], type.semis.map(s => s % 12));
 }
 
+const MAJOR_FIFTHS = [0, 2, 4, -1, 1, 3, 5]; // do, ré, mi, fa, sol, la, si naturels
+const SHARP_ORDER = [3, 0, 4, 1, 5, 2, 6]; // fa, do, sol, ré, la, mi, si
+
+/** Armure de la tonalité : nombre de dièses (>0) ou de bémols (<0). La mineure prend l'armure de sa relative majeure. */
+export function keyFifths(root: Sp, type: ScaleType): number {
+  return MAJOR_FIFTHS[root.step] + 7 * root.alter - (type.id === 'harm' ? 3 : 0);
+}
+
+/** Armure en toutes lettres, ex. « 2 bémols (Si♭, Mi♭) ». */
+export function keyLabel(fifths: number): string {
+  if (!fifths) return 'aucune altération';
+  const n = Math.abs(fifths);
+  const alter = fifths > 0 ? 1 : -1;
+  const order = fifths > 0 ? SHARP_ORDER : [...SHARP_ORDER].reverse();
+  const names = order.slice(0, n).map(step => spName({ step, alter }));
+  return `${n} ${fifths > 0 ? 'dièse' : 'bémol'}${n > 1 ? 's' : ''} (${names.join(', ')})`;
+}
+
+/** Place la gamme montante sur la clé de sol : départ à l'octave 4 (3 pour si, pour rester sur la portée). */
+export function placeScale(notes: Sp[]): { sp: Sp; octave: number }[] {
+  let octave = notes[0].step === 6 ? 3 : 4;
+  return notes.map((sp, i) => {
+    if (i && sp.step < notes[i - 1].step) octave++;
+    return { sp, octave };
+  });
+}
+
+/** MusicXML d'une gamme en noires : clé de sol, armure, 4/4, deux mesures et double barre finale. */
+export function scaleScoreXml(notes: { sp: Sp; octave: number }[], fifths: number): string {
+  const noteXml = (n: { sp: Sp; octave: number }) =>
+    `<note><pitch><step>${STEP_LETTERS[n.sp.step]}</step>${n.sp.alter ? `<alter>${n.sp.alter}</alter>` : ''}` +
+    `<octave>${n.octave}</octave></pitch><duration>1</duration><type>quarter</type></note>`;
+  return `<?xml version="1.0" encoding="UTF-8"?><score-partwise version="4.0">` +
+    `<part-list><score-part id="P1"><part-name></part-name></score-part></part-list><part id="P1">` +
+    `<measure number="1"><attributes><divisions>1</divisions><key><fifths>${fifths}</fifths></key>` +
+    `<time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>` +
+    `${notes.slice(0, 4).map(noteXml).join('')}</measure>` +
+    `<measure number="2">${notes.slice(4).map(noteXml).join('')}` +
+    `<barline location="right"><bar-style>light-heavy</bar-style></barline></measure></part></score-partwise>`;
+}
+
 export const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
 /** MusicXML d'une seule mesure (note isolée ou accord) pour l'afficher avec OSMD. */

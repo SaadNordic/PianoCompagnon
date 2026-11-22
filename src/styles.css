@@ -263,6 +263,10 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 .prompt { color: var(--muted); font-size: 0.95rem; }
 .stage { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .mini-staff { width: min(46vw, 190px); background: #fffdf8; border-radius: 12px; padding: 4px 8px; overflow: hidden; }
+.mini-staff.scale-staff { width: min(92vw, 560px); box-sizing: border-box; }
+.scale-staff .vf-stavenote.cur path { fill: #d9480f; stroke: #d9480f; }
+.scale-staff .vf-stavenote.done path { fill: #1c9a5a; stroke: #1c9a5a; }
+.key-info { color: var(--muted); font-size: 0.9rem; }
 .big-name { font-size: clamp(1.6rem, 6vw, 2.6rem); font-weight: 750; letter-spacing: -0.01em; }
 .sub-name { color: var(--accent); font-size: 1.1rem; font-weight: 600; min-height: 1.4em; }
 .spelled { color: #cdd2dd; min-height: 1.4em; font-size: 1.05rem; }
@@ -276,6 +280,16 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 @media (max-height: 500px) {
   .tr-body { gap: 4px; padding: 6px; justify-content: flex-start; }
   .mini-staff { width: min(30vw, 130px); }
+  /* paysage téléphone : portée à gauche, armure et notes à droite, tout reste au-dessus du clavier */
+  .stage.scale-stage {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 12px; row-gap: 2px;
+    align-items: center; width: 100%; max-width: 780px;
+  }
+  .scale-stage .big-name { grid-column: 1 / -1; font-size: 1.2rem; }
+  .scale-stage .scale-staff { grid-row: 2 / span 2; width: min(52vw, 400px); }
+  .scale-stage .key-info { font-size: 0.75rem; align-self: end; }
+  .scale-stage .seq { gap: 3px; align-self: start; }
+  .scale-stage .seq span { min-width: 30px; padding: 2px 4px; font-size: 0.8rem; }
 }
 
 /* ---------- divers ---------- */

@@ -9,8 +9,31 @@ import { pref, setPref, upref, setUpref } from './storage';
 import { h } from './ui';
 import {
   CHORDS, SCALES, STEP_PC, STEP_LETTERS, spName, spPc, spell, parseSp, scaleNotes, miniScoreXml, pick,
+  keyFifths, keyLabel, placeScale, scaleScoreXml,
   type Sp, type ChordType, type ScaleType
 } from './theory';
+
+/** Petite partition OSMD, sans titre ni marges. */
+function createMiniOsmd(el: HTMLElement): OpenSheetMusicDisplay {
+  const osmd = new OpenSheetMusicDisplay(el, {
+    backend: 'svg', autoResize: false, drawTitle: false, drawPartNames: false, drawMeasureNumbers: false,
+    drawComposer: false, drawCredits: false, pageBackgroundColor: '#fffdf8'
+  });
+  osmd.EngravingRules.PageTopMargin = 0;
+  osmd.EngravingRules.PageBottomMargin = 0;
+  return osmd;
+}
+
+/** Recadre le dessin sur la portée pour qu'elle remplisse le cadre. */
+function fitStaff(el: HTMLElement): void {
+  const svg = el.querySelector('svg');
+  if (!svg) return;
+  const bb = svg.getBBox();
+  svg.setAttribute('viewBox', `${bb.x - 6} ${bb.y - 4} ${bb.width + 12} ${bb.height + 8}`);
+  svg.setAttribute('width', '100%');
+  svg.removeAttribute('height');
+  svg.style.height = 'auto';
+}
 
 export interface ExerciseInfo { id: string; icon: string; title: string; desc: string }
 export const EXERCISES: ExerciseInfo[] = [
@@ -178,12 +201,7 @@ class ReadingTrainer extends Trainer<ReadLevel> {
   protected setup(): void {
     if (!this.osmd) {
       this.stage.append(this.staffEl);
-      this.osmd = new OpenSheetMusicDisplay(this.staffEl, {
-        backend: 'svg', autoResize: false, drawTitle: false, drawPartNames: false, drawMeasureNumbers: false,
-        drawComposer: false, drawCredits: false, pageBackgroundColor: '#fffdf8'
-      });
-      this.osmd.EngravingRules.PageTopMargin = 0;
-      this.osmd.EngravingRules.PageBottomMargin = 0;
+      this.osmd = createMiniOsmd(this.staffEl);
       this.actions.append(this.button('💡 Indice', () => this.reveal()));
     }
     const lo = this.level.clef === 'G' ? this.level.G[0] : this.level.F[0];
@@ -213,15 +231,7 @@ class ReadingTrainer extends Trainer<ReadLevel> {
     await this.osmd.load(xml);
     this.osmd.Zoom = 1;
     this.osmd.render();
-    // recadre le dessin sur la portée pour qu'elle remplisse le cadre
-    const svg = this.staffEl.querySelector('svg');
-    if (svg) {
-      const bb = svg.getBBox();
-      svg.setAttribute('viewBox', `${bb.x - 6} ${bb.y - 4} ${bb.width + 12} ${bb.height + 8}`);
-      svg.setAttribute('width', '100%');
-      svg.removeAttribute('height');
-      svg.style.height = 'auto';
-    }
+    fitStaff(this.staffEl);
   }
 
   private reveal(): void {
@@ -364,13 +374,20 @@ class ScaleTrainer extends Trainer<ScaleLevel> {
   private played: number[] = [];
   private title = h('div', { class: 'big-name' });
   private seq = h('div', { class: 'seq' });
+  private staffEl = h('div', { class: 'mini-staff scale-staff' });
+  private keyInfo = h('div', { class: 'key-info' });
+  private osmd!: OpenSheetMusicDisplay;
+  private staffNotes: Element[] = [];
+  private drawId = 0; // ignore un dessin devenu obsolète (« Passer » rapide)
   private type!: ScaleType;
   private root!: Sp;
   private showAll = false;
 
   protected setup(): void {
     if (!this.stage.childElementCount) {
-      this.stage.append(this.title, this.seq);
+      this.stage.classList.add('scale-stage');
+      this.stage.append(this.title, this.staffEl, this.keyInfo, this.seq);
+      this.osmd = createMiniOsmd(this.staffEl);
       this.actions.append(
         this.button('💡 Montrer les notes', () => { this.showAll = true; this.renderSeq(); }),
         this.button('↺ Recommencer', () => { this.pos = 0; this.played = []; this.kb.clearDone(); this.renderSeq(); }),
@@ -387,8 +404,28 @@ class ScaleTrainer extends Trainer<ScaleLevel> {
     this.pos = 0;
     this.played = [];
     this.showAll = false;
-    this.prompt.textContent = 'Jouez la gamme montante (une octave)';
+    this.prompt.textContent = 'Lisez la portée et jouez la gamme montante (une octave)';
     this.title.textContent = `${spName(this.root)} ${this.type.label}`;
+    const fifths = keyFifths(this.root, this.type);
+    const leading = this.notes[6];
+    this.keyInfo.textContent = `Armure : ${keyLabel(fifths)}` +
+      (this.type.id === 'harm' ? ` · 7e note haussée : ${spName(leading)}${leading.alter ? '' : '♮'}` : '');
+    this.staffNotes = [];
+    this.renderSeq();
+    void this.drawStaff(fifths);
+  }
+
+  private async drawStaff(fifths: number): Promise<void> {
+    const id = ++this.drawId;
+    await this.osmd.load(scaleScoreXml(placeScale(this.notes), fifths));
+    if (id !== this.drawId) return;
+    this.osmd.Zoom = 1;
+    // dessin à largeur fixe puis mis à l'échelle : sur petit écran, les deux mesures restent sur une seule ligne
+    this.staffEl.style.width = '640px';
+    this.osmd.render();
+    this.staffEl.style.width = '';
+    fitStaff(this.staffEl);
+    this.staffNotes = [...this.staffEl.querySelectorAll('.vf-stavenote')];
     this.renderSeq();
   }
 
@@ -397,6 +434,10 @@ class ScaleTrainer extends Trainer<ScaleLevel> {
     this.notes.forEach((n, i) => {
       const done = i < this.pos;
       this.seq.append(h('span', { class: done ? 'done' : i === this.pos ? 'cur' : '' }, done || this.showAll ? spName(n) : '?'));
+    });
+    this.staffNotes.forEach((g, i) => {
+      g.classList.toggle('done', i < this.pos);
+      g.classList.toggle('cur', i === this.pos);
     });
   }
 
