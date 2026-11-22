@@ -91,55 +91,62 @@ export const MAQAMAT: Maqam[] = [
   { id: 'sikah', label: 'Sikah sur Mi½♭', tonic: 51.5, semis: [0, 1.5, 3.5, 5.5, 7, 8.5, 10.5, 12] }
 ];
 
-// ---------- son pincé (synthèse Karplus-Strong) ----------
+// ---------- son du oud : vrais enregistrements (public/oud/, CC0) ----------
 
-const plucks = new Map<number, AudioBuffer>();
+/** Notes enregistrées ; les autres, quarts de ton compris, sont transposées depuis la plus proche. */
+const OUD_SAMPLES = [39, 44, 46, 48, 50, 52, 53, 54, 55, 57, 58, 59, 60, 62, 63, 64, 65];
+const samples = new Map<number, AudioBuffer>();
+let oudLoading: Promise<void> | null = null;
+let oudReady = false;
 
-function pluckBuffer(c: BaseAudioContext, period: number, hz: number): AudioBuffer {
-  const cached = plucks.get(period);
-  if (cached) return cached;
-  const len = Math.floor(c.sampleRate * 2.2);
-  const buf = c.createBuffer(1, len, c.sampleRate);
-  const d = buf.getChannelData(0);
-  const rho = Math.pow(0.001, 1 / (hz * 2.6)); // extinction en 2,6 s environ, quelle que soit la note
-  let last = 0;
-  for (let i = 0; i < len; i++) {
-    if (i <= period) {
-      // bruit adouci : l'attaque d'un plectre (risha)
-      last = last * 0.45 + (Math.random() * 2 - 1) * 0.55;
-      d[i] = last;
-    } else {
-      d[i] = (rho * (d[i - period] + d[i - period - 1])) / 2;
-    }
+/** Charge les échantillons (une seule fois, sauf si tout a échoué). */
+export function loadOud(): Promise<void> {
+  if (!oudLoading) {
+    const { ctx } = audioOut();
+    oudLoading = Promise.all(OUD_SAMPLES.map(async m => {
+      try {
+        const data = await fetch(`${import.meta.env.BASE_URL}oud/n${m}.wav`).then(r => r.arrayBuffer());
+        samples.set(m, await ctx.decodeAudioData(data));
+      } catch { /* note manquante : la plus proche servira */ }
+    })).then(() => {
+      oudReady = samples.size > 0;
+      if (!oudReady) oudLoading = null;
+    });
   }
-  for (let i = 0; i < 2000; i++) d[len - 1 - i] *= i / 2000;
-  plucks.set(period, buf);
-  return buf;
+  return oudLoading;
+}
+
+function nearestOud(p: number): number {
+  let best = -1;
+  for (const m of samples.keys()) if (best < 0 || Math.abs(m - p) < Math.abs(best - p)) best = m;
+  return best;
 }
 
 /** Joue une note au son de oud (les quarts de ton sont exacts). `when` : temps du contexte audio. */
 export function playOud(p: number, durationSec = 1.2, velocity = 80, when = 0): void {
   const { ctx, out } = audioOut();
+  if (!oudReady) {
+    // premier son : on joue dès le chargement, sauf si le moment de la note est passé
+    const asked = ctx.currentTime;
+    void loadOud().then(() => {
+      if (oudReady && (when ? when >= ctx.currentTime : ctx.currentTime - asked < 0.5)) playOud(p, durationSec, velocity, when);
+    });
+    return;
+  }
+  const sample = nearestOud(p);
   const t0 = Math.max(ctx.currentTime, when || ctx.currentTime);
-  const hz = pitchToHz(p, refHz());
-  // le filtre de la boucle retarde d'un demi-échantillon ; la vitesse de lecture corrige le reste
-  const period = Math.max(2, Math.round(ctx.sampleRate / hz - 0.5));
-  const actual = ctx.sampleRate / (period + 0.5);
   const src = ctx.createBufferSource();
-  src.buffer = pluckBuffer(ctx, period, actual);
-  src.playbackRate.value = hz / actual;
-  const body = ctx.createBiquadFilter();
-  body.type = 'lowpass';
-  body.frequency.value = 3200;
+  src.buffer = samples.get(sample)!;
+  src.playbackRate.value = pitchToHz(p, refHz()) / pitchToHz(sample);
   const g = ctx.createGain();
-  const level = Math.pow(Math.max(1, velocity) / 127, 1.4) * 1.3;
-  const end = t0 + Math.max(0.15, durationSec);
-  g.gain.setValueAtTime(level, t0);
-  g.gain.setTargetAtTime(0, end, 0.12);
-  src.connect(body).connect(g).connect(out);
+  const hold = Math.max(0.15, durationSec);
+  const end = t0 + hold;
+  g.gain.setValueAtTime(Math.pow(Math.max(1, velocity) / 127, 1.2) * 1.5, t0);
+  g.gain.setTargetAtTime(0, end, 0.12); // la corde continue de résonner un peu après sa durée écrite
+  src.connect(g).connect(out);
   src.start(t0);
   src.stop(end + 0.8);
-  micInput.mute((t0 - ctx.currentTime + Math.max(0.15, durationSec)) * 1000 + 450);
+  micInput.mute((t0 - ctx.currentTime + hold) * 1000 + 700);
 }
 
 // ---------- manche à l'écran ----------

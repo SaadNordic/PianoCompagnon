@@ -1,0 +1,4 @@
+Echantillons de oud : "Oud.wav", son 160461 sur Freesound (https://freesound.org/s/160461/).
+Auteur : compte Freesound supprime (--DeletedUser--).
+Licence Creative Commons Zero 1.0 (CC0, domaine public) - https://creativecommons.org/publicdomain/zero/1.0/
+Modifications : 17 notes decoupees, passees en mono, volume egalise, extinction raccourcie.
