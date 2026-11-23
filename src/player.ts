@@ -10,6 +10,7 @@ import { renderOriginals } from './originals';
 import { micInput, micBanner, micLabel } from './mic';
 import { OudNeck, WRITTEN_OFFSET, loadOud, oudName, playOud, positionLabel } from './oud';
 import { createTuner } from './oudTuner';
+import { stripXmlInvalid } from './musicxml';
 
 type HandSel = 'both' | 'R' | 'L';
 type Part = 'R' | 'L' | 'acc'; // acc = partie jouée par l'appli (autre instrument)
@@ -41,7 +42,11 @@ export class Player {
   private hits = 0;
   private startedAt = 0;
   private finished = false;
-  private loop: { from: number; to: number } | null = null;
+  private section: { from: number; to: number } | null = null; // passage choisi (indices de mesures)
+  private sectionRepeat = pref('sectionRepeat', true); // à la fin du passage : reprendre ou s'arrêter
+  private picking: 'from' | 'to' | null = null; // choix du passage en cours, au toucher sur la partition
+  private pickFrom = 0;
+  private partial = false; // tout le morceau n'a pas été joué : pas de record
   private listenTimer = 0;
   private listenEnd = 0;
   private listening = false;
@@ -50,7 +55,12 @@ export class Player {
   private infoEl!: HTMLElement;
   private statsEl!: HTMLElement;
   private listenBtn!: HTMLButtonElement;
-  private loopBtn!: HTMLButtonElement;
+  private sectionBtn!: HTMLButtonElement;
+  private sectionBarEl!: HTMLElement;
+  private sectionLabel!: HTMLElement;
+  private sectionModes!: HTMLElement;
+  private stopBtn!: HTMLButtonElement;
+  private repeatBtn!: HTMLButtonElement;
   private midiDot!: HTMLElement;
   private overlay: HTMLElement | null = null;
   private measureCount = 0;
@@ -71,7 +81,7 @@ export class Player {
     }
     const banner = this.oud ? micBanner() : null;
     if (banner) this.unsub.push(banner.destroy);
-    this.el = h('div', { class: 'player' }, [this.topBar(), this.settingsPanel(), banner?.el, this.scoreEl, this.infoBar(), this.kb.el]);
+    this.el = h('div', { class: 'player' }, [this.topBar(), this.settingsPanel(), this.sectionBar(), banner?.el, this.scoreEl, this.infoBar(), this.kb.el]);
   }
 
   private sound(m: number, dur: number, vel: number, at = 0): void {
@@ -108,16 +118,30 @@ export class Player {
     }));
     this.midiDot = h('span', { class: 'midi-dot', title: '' });
     this.listenBtn = h('button', { class: 'icon', title: 'Écouter la partition', onclick: () => (this.listening ? this.stopListen() : this.listen()) }, '▶') as HTMLButtonElement;
-    this.loopBtn = h('button', { title: 'Répéter un passage', onclick: () => this.toggleLoop() }, '⟲') as HTMLButtonElement;
+    this.sectionBtn = h('button', { title: 'Choisir un passage à jouer', onclick: () => this.togglePick() }, 'Passage') as HTMLButtonElement;
     return h('header', { class: 'bar' }, [
       h('button', { class: 'icon', title: 'Bibliothèque', onclick: () => this.onBack() }, '←'),
       h('div', { class: 'title' }, this.piece.title),
       this.oud ? null : seg,
       this.listenBtn,
-      this.loopBtn,
+      this.sectionBtn,
       this.midiDot,
       h('button', { class: 'icon menu-btn', title: 'Menu', onclick: (e: Event) => { e.stopPropagation(); this.toggleMenu(); } }, '⋮')
     ]);
+  }
+
+  /** Bandeau du passage : consigne pendant le choix, puis mesures choisies et bouton S'arrête / Reprend. */
+  private sectionBar(): HTMLElement {
+    this.sectionLabel = h('span', { class: 'section-label' });
+    this.stopBtn = h('button', { title: 'S’arrêter à la fin du passage', onclick: () => this.setSectionRepeat(false) }, '■ S’arrête') as HTMLButtonElement;
+    this.repeatBtn = h('button', { title: 'Reprendre le passage au début', onclick: () => this.setSectionRepeat(true) }, '⟲ Reprend') as HTMLButtonElement;
+    this.sectionModes = h('div', { class: 'seg' }, [this.stopBtn, this.repeatBtn]);
+    this.sectionBarEl = h('div', { class: 'section-bar' }, [
+      this.sectionLabel,
+      this.sectionModes,
+      h('button', { class: 'icon', title: 'Annuler le passage', onclick: () => this.closeSectionBar() }, '✕')
+    ]);
+    return this.sectionBarEl;
   }
 
   private settingsEl!: HTMLElement;
@@ -199,7 +223,8 @@ export class Player {
     this.osmd.EngravingRules.PageTopMargin = 1;
     this.scoreEl.innerHTML = '<div class="loading">Chargement de la partition…</div>';
     try {
-      await this.osmd.load(this.piece.xml, this.piece.title);
+      // les morceaux déjà enregistrés peuvent contenir un caractère nul venu du MIDI
+      await this.osmd.load(stripXmlInvalid(this.piece.xml), this.piece.title);
       this.scoreEl.querySelector('.loading')?.remove();
       this.osmd.Zoom = this.zoom;
       this.osmd.render();
@@ -327,6 +352,7 @@ export class Player {
     this.cursorIdx = 0;
     this.moveCursor(target);
     this.osmd.cursor.show();
+    this.drawSectionMarks(); // un nouveau rendu efface le surlignage
   }
 
   private practiced(p: Part): boolean {
@@ -342,9 +368,15 @@ export class Player {
   /** Arrive sur une position : prépare les notes attendues ou joue l'accompagnement. */
   private enterStep(i: number, fromAdvance = true): void {
     this.clearPending();
-    if (this.loop && fromAdvance) {
-      const atEnd = i >= this.steps.length || this.steps[i].measure > this.loop.to;
-      if (atEnd) i = this.firstStepOfMeasure(this.loop.from);
+    if (this.section && fromAdvance) {
+      const atEnd = i >= this.steps.length || this.steps[i].measure > this.section.to;
+      if (atEnd) {
+        // sans note à jouer pour la main choisie, reprendre tournerait sans fin
+        if (!this.sectionRepeat || !this.sectionHasNotes()) { this.finishSection(); return; }
+        this.clearColors();
+        this.resetRun();
+        i = this.firstStepOfMeasure(this.section.from);
+      }
     }
     if (i >= this.steps.length) { this.finish(); return; }
     this.idx = i;
@@ -460,8 +492,14 @@ export class Player {
     this.stopListen();
     this.closeOverlay();
     this.clearColors();
-    this.wrong = 0; this.hits = 0; this.startedAt = 0; this.finished = false;
-    this.enterStep(this.loop ? this.firstStepOfMeasure(this.loop.from) : 0, false);
+    this.resetRun();
+    this.finished = false;
+    this.partial = !!this.section;
+    this.enterStep(this.section ? this.firstStepOfMeasure(this.section.from) : 0, false);
+  }
+
+  private resetRun(): void {
+    this.wrong = 0; this.hits = 0; this.startedAt = 0;
   }
 
   private finish(): void {
@@ -471,8 +509,9 @@ export class Player {
     const total = this.hits + this.wrong;
     const acc = total ? Math.round((this.hits / total) * 100) : 100;
     const best = this.piece.bestRun;
-    const isBest = !best || this.wrong < best.wrong || (this.wrong === best.wrong && secs < best.seconds);
-    this.piece.playCount = (this.piece.playCount ?? 0) + 1;
+    const complete = !this.partial; // un morceau joué en partie ne compte ni comme record ni comme lecture
+    const isBest = complete && (!best || this.wrong < best.wrong || (this.wrong === best.wrong && secs < best.seconds));
+    if (complete) this.piece.playCount = (this.piece.playCount ?? 0) + 1;
     if (isBest && this.hits > 0) this.piece.bestRun = { wrong: this.wrong, seconds: secs };
     void savePiece(this.piece);
     const mmss = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
@@ -498,46 +537,171 @@ export class Player {
 
   // ---------- navigation dans la partition ----------
 
-  private onScoreClick(e: MouseEvent): void {
-    if (this.listening) return;
+  private measureGroup(gm: unknown): SVGGElement | undefined {
+    return (gm as { getSVGGElement?: () => SVGGElement | undefined })?.getSVGGElement?.();
+  }
+
+  private measureAt(e: MouseEvent): number {
     const list = this.osmd.GraphicSheet?.MeasureList;
-    if (!list) return;
+    if (!list) return -1;
     for (let m = 0; m < list.length; m++) {
       for (const gm of list[m] ?? []) {
-        const g = (gm as unknown as { getSVGGElement?: () => SVGGElement | undefined })?.getSVGGElement?.();
+        const g = this.measureGroup(gm);
         if (!g) continue;
         const r = g.getBoundingClientRect();
-        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top - 10 && e.clientY <= r.bottom + 10) {
-          this.goToMeasure(m);
-          return;
-        }
+        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top - 10 && e.clientY <= r.bottom + 10) return m;
       }
     }
+    return -1;
+  }
+
+  private onScoreClick(e: MouseEvent): void {
+    if (!this.picking && this.listening) return;
+    const m = this.measureAt(e);
+    if (m < 0) return;
+    if (this.picking) { this.pickMeasure(m); return; }
+    if (this.section && (m < this.section.from || m > this.section.to)) {
+      toast('Cette mesure est hors du passage');
+      return;
+    }
+    this.goToMeasure(m);
   }
 
   private goToMeasure(m: number): void {
     this.closeOverlay();
     this.finished = false;
+    if (m > 0) this.partial = true;
     this.enterStep(this.firstStepOfMeasure(m), false);
     toast(`Mesure ${m + 1}`);
   }
 
-  private toggleLoop(): void {
-    if (this.loop) {
-      this.loop = null;
-      this.loopBtn.classList.remove('on');
-      this.loopBtn.textContent = '⟲';
+  // ---------- passage choisi ----------
+
+  private togglePick(): void {
+    if (this.picking) { this.picking = null; this.renderSection(); return; }
+    this.stopListen();
+    this.picking = 'from';
+    this.renderSection();
+  }
+
+  private pickMeasure(m: number): void {
+    if (this.picking === 'from') {
+      this.pickFrom = m;
+      this.picking = 'to';
+      this.renderSection();
       return;
     }
-    const cur = (this.steps[this.idx]?.measure ?? 0) + 1;
-    const from = Number(prompt('Répéter à partir de la mesure :', String(cur)));
-    if (!from) return;
-    const to = Number(prompt('Jusqu\'à la mesure :', String(Math.min(this.measureCount, from + 3))));
-    if (!to || to < from) return;
-    this.loop = { from: Math.max(1, from) - 1, to: Math.min(this.measureCount, to) - 1 };
-    this.loopBtn.classList.add('on');
-    this.loopBtn.textContent = `⟲ ${from}–${to}`;
-    this.goToMeasure(this.loop.from);
+    this.picking = null;
+    this.section = { from: Math.min(this.pickFrom, m), to: Math.max(this.pickFrom, m) };
+    this.partial = true;
+    this.finished = false;
+    this.closeOverlay();
+    this.clearColors();
+    this.resetRun();
+    this.renderSection();
+    this.enterStep(this.firstStepOfMeasure(this.section.from), false);
+  }
+
+  /** ✕ du bandeau : annule le choix en cours, sinon revient au morceau entier. */
+  private closeSectionBar(): void {
+    if (this.picking) { this.picking = null; this.renderSection(); return; }
+    this.stopListen();
+    this.section = null;
+    this.renderSection();
+  }
+
+  private setSectionRepeat(repeat: boolean): void {
+    this.sectionRepeat = repeat;
+    setPref('sectionRepeat', repeat);
+    this.renderSection();
+  }
+
+  private sectionHasNotes(): boolean {
+    const s = this.section;
+    return !!s && this.steps.some(st => st.measure >= s.from && st.measure <= s.to && st.notes.some(n => this.practiced(n.part)));
+  }
+
+  private renderSection(): void {
+    const s = this.section;
+    const open = !!s || !!this.picking;
+    this.sectionBarEl.classList.toggle('open', open);
+    this.sectionBtn.classList.toggle('on', open);
+    this.sectionBtn.textContent = s ? (s.from === s.to ? `${s.from + 1}` : `${s.from + 1}–${s.to + 1}`) : 'Passage';
+    this.sectionModes.style.display = this.picking ? 'none' : '';
+    this.stopBtn.classList.toggle('on', !this.sectionRepeat);
+    this.repeatBtn.classList.toggle('on', this.sectionRepeat);
+    if (this.picking === 'from') this.sectionLabel.textContent = 'Touchez la première mesure';
+    else if (this.picking === 'to') this.sectionLabel.textContent = `Mesure ${this.pickFrom + 1} : touchez la dernière`;
+    else if (s) this.sectionLabel.textContent = s.from === s.to ? `Mesure ${s.from + 1}` : `Mesures ${s.from + 1} à ${s.to + 1}`;
+    this.drawSectionMarks();
+  }
+
+  /** Surligne le passage directement dans la partition, derrière les notes, une bande par ligne. */
+  private drawSectionMarks(): void {
+    this.scoreEl.querySelectorAll('.section-mark').forEach(x => x.remove());
+    const range = this.picking === 'to' ? { from: this.pickFrom, to: this.pickFrom } : this.picking ? null : this.section;
+    const list = this.osmd?.GraphicSheet?.MeasureList;
+    if (!range || !list) return;
+    const bands: { first: SVGGElement; l: number; t: number; r: number; b: number }[] = [];
+    for (let m = range.from; m <= range.to; m++) {
+      const groups = (list[m] ?? []).map(gm => this.measureGroup(gm)).filter((g): g is SVGGElement => !!g);
+      if (!groups.length) continue;
+      const boxes = groups.map(g => g.getBBox());
+      const l = Math.min(...boxes.map(x => x.x)), r = Math.max(...boxes.map(x => x.x + x.width));
+      const t = Math.min(...boxes.map(x => x.y)), b = Math.max(...boxes.map(x => x.y + x.height));
+      const band = bands[bands.length - 1];
+      if (band && band.first.ownerSVGElement === groups[0].ownerSVGElement && t < band.b && b > band.t) {
+        band.l = Math.min(band.l, l); band.r = Math.max(band.r, r);
+        band.t = Math.min(band.t, t); band.b = Math.max(band.b, b);
+      } else {
+        bands.push({ first: groups[0], l, t, r, b });
+      }
+    }
+    for (const x of bands) {
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('class', 'section-mark');
+      rect.setAttribute('x', String(x.l));
+      rect.setAttribute('y', String(x.t));
+      rect.setAttribute('width', String(x.r - x.l));
+      rect.setAttribute('height', String(x.b - x.t));
+      x.first.parentNode?.insertBefore(rect, x.first);
+    }
+  }
+
+  /** Fin du passage en mode « S'arrête » : bilan du passage, sans toucher aux records du morceau. */
+  private finishSection(): void {
+    const s = this.section!;
+    this.finished = true;
+    this.kb.setExpected(new Map());
+    const total = this.hits + this.wrong;
+    const acc = total ? Math.round((this.hits / total) * 100) : 100;
+    const label = s.from === s.to ? `Mesure ${s.from + 1}` : `Mesures ${s.from + 1} à ${s.to + 1}`;
+    const hasNext = s.to + 1 < this.measureCount;
+    this.overlay = h('div', { class: 'overlay' }, [
+      h('div', { class: 'card done' }, [
+        h('div', { class: 'big' }, this.wrong === 0 ? '🎉 Passage réussi !' : '👏 Passage terminé'),
+        h('p', {}, label),
+        h('p', {}, `${this.wrong} fausse${this.wrong > 1 ? 's' : ''} note${this.wrong > 1 ? 's' : ''} — précision ${acc} %.`),
+        h('div', { class: 'row' }, [
+          h('button', { class: 'primary', onclick: () => this.restart() }, 'Rejouer le passage'),
+          hasNext ? h('button', { onclick: () => this.continueAfterSection() }, 'Continuer la suite') : null,
+          h('button', { onclick: () => { this.section = null; this.renderSection(); this.restart(); } }, 'Tout le morceau')
+        ])
+      ])
+    ]);
+    this.el.appendChild(this.overlay);
+  }
+
+  private continueAfterSection(): void {
+    const next = this.section!.to + 1;
+    this.section = null;
+    this.renderSection();
+    this.closeOverlay();
+    this.clearColors();
+    this.resetRun();
+    this.finished = false;
+    this.partial = true;
+    this.enterStep(this.firstStepOfMeasure(next), false);
   }
 
   private setZoom(z: number): void {
@@ -546,7 +710,8 @@ export class Player {
     this.osmd.Zoom = this.zoom;
     this.osmd.render();
     this.refreshCursor();
-    for (let i = 0; i < this.idx; i++) this.colorStep(this.steps[i]);
+    const first = this.section ? this.firstStepOfMeasure(this.section.from) : 0;
+    for (let i = first; i < this.idx; i++) this.colorStep(this.steps[i]);
   }
 
   // ---------- écoute ----------
@@ -560,12 +725,21 @@ export class Player {
     this.listenBtn.classList.add('on');
     if (!this.oud) await loadPiano(); // le vrai son de piano dès la première note
     if (!this.listening) return;
-    const startIdx = this.finished ? 0 : this.idx;
+    let startIdx = this.finished ? 0 : this.idx;
+    const s = this.section;
+    if (s && (this.finished || this.steps[startIdx].measure < s.from || this.steps[startIdx].measure > s.to)) {
+      startIdx = this.firstStepOfMeasure(s.from);
+    }
     this.finished = false;
+    this.listenFrom(startIdx);
+  }
+
+  /** Joue à partir d'une position, jusqu'à la fin du passage ou du morceau. */
+  private listenFrom(startIdx: number): void {
     const spw = this.secPerWhole() / this.speed;
     const base = this.steps[startIdx].ts;
     const t0 = now() + 0.15;
-    const endMeasure = this.loop?.to ?? Infinity;
+    const endMeasure = this.section?.to ?? Infinity;
     let next = startIdx;
     const tick = () => {
       const horizon = now() + 0.35;
@@ -591,7 +765,13 @@ export class Player {
         if (!this.listenEnd) {
           const last = this.steps[next - 1];
           const endAt = t0 + (last.ts - base) * spw + Math.max(0.25, ...last.notes.map(n => n.wholes)) * spw;
-          this.listenEnd = window.setTimeout(() => this.stopListen(), Math.max(0, (endAt - now()) * 1000));
+          this.listenEnd = window.setTimeout(() => {
+            this.listenEnd = 0;
+            const sec = this.section;
+            if (sec && this.sectionRepeat) { this.listenFrom(this.firstStepOfMeasure(sec.from)); return; }
+            if (sec) this.idx = this.firstStepOfMeasure(sec.from); // prêt à rejouer le passage
+            this.stopListen();
+          }, Math.max(0, (endAt - now()) * 1000));
         }
         return false;
       }

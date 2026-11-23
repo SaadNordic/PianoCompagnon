@@ -206,6 +206,15 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 .score .loading, .score .error { padding: 30px; text-align: center; color: #555; }
 .score .error { color: #b3261e; }
 .seg .short { display: none; }
+.section-bar {
+  display: none; align-items: center; gap: 8px; padding: 4px 8px; flex-shrink: 0;
+  background: var(--panel2); border-bottom: 1px solid var(--line); font-size: 0.88rem;
+}
+.section-bar.open { display: flex; }
+.section-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.section-bar .seg button { padding: 4px 9px; white-space: nowrap; }
+.section-bar > .icon { padding: 3px 9px; }
+.section-mark { fill: #3d7cf2; fill-opacity: 0.13; stroke: #3d7cf2; stroke-opacity: 0.55; stroke-width: 1; pointer-events: none; }
 .settings {
   position: absolute; top: 52px; right: 8px; z-index: 20; display: none; flex-direction: column; gap: 10px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; box-shadow: 0 10px 30px #0008; min-width: 230px;

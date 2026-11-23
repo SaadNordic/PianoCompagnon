@@ -48,8 +48,13 @@ const VALUES: [number, string, boolean][] = [
 
 interface Ev { start: number; len: number; pitches: number[] | null; spell?: Map<number, Spelling> }
 
+/** Retire les caractères interdits en XML 1.0 (ex. l'octet nul final des noms de piste MIDI). */
+export function stripXmlInvalid(s: string): string {
+  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '');
+}
+
 function esc(s: string): string {
-  return s.replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]!));
+  return stripXmlInvalid(s).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]!));
 }
 
 /** Attribue une main à chaque note qui n'en a pas : sous le do central -> main gauche. */
