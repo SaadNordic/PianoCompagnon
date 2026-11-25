@@ -14,6 +14,9 @@ echo [2/5] Base de donnees...
 
 echo [3/5] Tache planifiee PianoCompagnon (au demarrage, compte Systeme)...
 schtasks /create /s 192.168.1.240 /tn "PianoCompagnon" /tr "C:\PianoCompagnon\serveur\_run_piano.bat" /sc onstart /ru SYSTEM /rl HIGHEST /f || goto fin
+:: sans limite de duree : par defaut Windows arrete la tache au bout de 72 h (Mine et FlySky arretes ainsi le 25/11/2026) ;
+:: installation a distance et WinRM ferme sur le serveur : definition XML modifiee puis recreee par schtasks
+powershell -NoProfile -Command "$f = Join-Path $env:TEMP 'piano_tache.xml'; $x = (schtasks /query /s 192.168.1.240 /tn 'PianoCompagnon' /xml) -join [char]10; if ($x -notmatch 'ExecutionTimeLimit') { $x = $x -replace '</Settings>', '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>' }; [IO.File]::WriteAllText($f, $x, [Text.Encoding]::Unicode); schtasks /create /s 192.168.1.240 /tn 'PianoCompagnon' /xml $f /ru SYSTEM /f; exit $LASTEXITCODE" || goto fin
 
 echo [4/5] Pare-feu : la regle du port 8010 est creee par la tache au demarrage.
 
