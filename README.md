@@ -1,4 +1,4 @@
-# Piano Compagnon
+# My Music Inst
 
 Application de travail du piano : vous importez une partition, vous branchez votre piano numérique en USB-MIDI,
 et la partition n'avance que lorsque vous jouez les bonnes notes (mode attente).

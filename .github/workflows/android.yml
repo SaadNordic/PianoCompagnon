@@ -73,5 +73,5 @@ jobs:
         run: |
           gh release delete apk --yes --cleanup-tag || true
           gh release create apk PianoCompagnon.apk --latest \
-            --title "Piano Compagnon - version ${{ github.run_number }}" \
+            --title "My Music Inst - version ${{ github.run_number }}" \
             --notes "Ouvrez ce lien sur le telephone Android et installez PianoCompagnon.apk."

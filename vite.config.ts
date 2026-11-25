@@ -15,9 +15,9 @@ export default defineConfig({
       includeAssets: ['icon.svg'],
       workbox: { maximumFileSizeToCacheInBytes: 8 * 1024 * 1024, globPatterns: ['**/*.{js,css,html,svg,png,xml}'] },
       manifest: {
-        name: 'Piano Compagnon',
-        short_name: 'Piano',
-        description: 'Lis ta partition, joue sur ton piano MIDI : la partition avance quand tu joues juste.',
+        name: 'My Music Inst',
+        short_name: 'My Music',
+        description: 'Lis ta partition, joue sur ton instrument : la partition avance quand tu joues juste.',
         lang: 'fr',
         display: 'fullscreen',
         orientation: 'any',

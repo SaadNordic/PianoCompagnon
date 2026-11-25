@@ -1,9 +1,9 @@
 import { Midi } from '@tonejs/midi';
 import { unzipSync, strFromU8 } from 'fflate';
-import { notesToMusicXml, type RawNote, type Hand } from './musicxml';
+import { notesToMusicXml, stripXmlInvalid, type RawNote, type Hand } from './musicxml';
 import { looksLikePcn, parsePcn, pcnToXml, normalizePcn } from './codification';
 
-export interface Imported { title: string; xml: string; source: 'musicxml' | 'midi' | 'pcn'; composer?: string; code?: string }
+export interface Imported { title: string; xml: string; source: 'musicxml' | 'midi' | 'pcn'; composer?: string; code?: string; notice?: string }
 
 export class ImportError extends Error {}
 
@@ -49,11 +49,25 @@ function fromMxl(buf: Uint8Array): string {
   return strFromU8(files[path]);
 }
 
-function fromMidi(buf: Uint8Array, title: string): string {
+/**
+ * Pistes à jouer : le piano acoustique, sinon les autres pianos (électrique, clavecin…).
+ * Toutes les pistes de piano sont gardées, car une fugue peut avoir une piste par voix.
+ * Sans aucun piano : la piste la plus fournie, pour rester jouable à deux mains.
+ */
+function pickPianoTracks(all: Midi['tracks']): { tracks: Midi['tracks']; noPiano: boolean } {
+  const melodic = all.filter(t => t.notes.length > 0 && t.channel !== 9); // canal 10 = batterie
+  if (!melodic.length) throw new ImportError('Ce fichier MIDI ne contient aucune note.');
+  const acoustic = melodic.filter(t => t.instrument.number <= 3);
+  if (acoustic.length) return { tracks: acoustic, noPiano: false };
+  const pianos = melodic.filter(t => t.instrument.family === 'piano');
+  if (pianos.length) return { tracks: pianos, noPiano: false };
+  return { tracks: [melodic.reduce((a, b) => (b.notes.length > a.notes.length ? b : a))], noPiano: true };
+}
+
+function fromMidi(buf: Uint8Array, title: string): { xml: string; notice?: string } {
   const midi = new Midi(buf);
   const ppq = midi.header.ppq;
-  const tracks = midi.tracks.filter(t => t.notes.length > 0 && t.channel !== 9); // canal 10 = batterie
-  if (!tracks.length) throw new ImportError('Ce fichier MIDI ne contient aucune note.');
+  const { tracks, noPiano } = pickPianoTracks(midi.tracks);
   // deux pistes -> main droite = la plus aiguë ; sinon répartition par hauteur
   let handOf: (ti: number) => Hand | undefined = () => undefined;
   if (tracks.length === 2) {
@@ -69,8 +83,11 @@ function fromMidi(buf: Uint8Array, title: string): string {
   const key = midi.header.keySignatures[0];
   const fifths = key ? (KEY_FIFTHS[key.key] ?? 0) - (key.scale === 'minor' ? 3 : 0) : 0;
   const bpm = midi.header.tempos[0]?.bpm ?? 100;
-  const name = midi.header.name?.trim() || title;
-  return notesToMusicXml(notes, { title: name, beats: ts[0], beatType: ts[1], bpm, fifths: Math.max(-7, Math.min(7, fifths)) });
+  const name = stripXmlInvalid(midi.header.name ?? '').trim() || title;
+  return {
+    xml: notesToMusicXml(notes, { title: name, beats: ts[0], beatType: ts[1], bpm, fifths: Math.max(-7, Math.min(7, fifths)) }),
+    notice: noPiano ? `Pas de piano dans « ${title} » : seule la piste principale a été gardée.` : undefined
+  };
 }
 
 export async function importFile(file: File): Promise<Imported> {
@@ -88,7 +105,7 @@ export async function importFile(file: File): Promise<Imported> {
     return { title: t, xml: pcnToXml(parsed, t), source: 'pcn', composer: parsed.meta.composer, code: normalizePcn(text, t, parsed.meta.composer) };
   }
   if (isMidi || /\.midi?$/.test(name)) {
-    return { title, xml: fromMidi(buf, title), source: 'midi' };
+    return { title, ...fromMidi(buf, title), source: 'midi' };
   }
   if (isZip || name.endsWith('.mxl')) {
     const xml = fromMxl(buf);

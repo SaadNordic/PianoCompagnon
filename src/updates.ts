@@ -38,7 +38,7 @@ async function latestBuild(): Promise<number> {
     if (!r.ok) throw new Error(`GitHub a répondu ${r.status}`);
     data = await r.json();
   }
-  // titre de la publication : « Piano Compagnon - version 42 »
+  // titre de la publication : « My Music Inst - version 42 »
   const m = (data.name ?? '').match(/version\s+(\d+)/i);
   if (!m) throw new Error('Numéro de version introuvable sur GitHub');
   return Number(m[1]);

@@ -76,6 +76,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     for (const f of files) {
       try {
         const imp = await importFile(f);
+        if (imp.notice) toast(imp.notice, 5000);
         const code = isOud && imp.code ? asOudPcn(imp.code) : imp.code;
         const p: Piece = {
           id: newId(), title: imp.title, xml: code ? pcnToXml(parsePcn(code), imp.title) : imp.xml, source: imp.source, addedAt: Date.now(),
@@ -225,6 +226,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     if (p.code) tabDefs.push({ label: 'Codification', render: codeTab });
     if (p.hasOriginal) tabDefs.push({ label: 'Original', render: origTab });
     const t = tabs(tabDefs);
+    const isDictee = p.source === 'dictee' && !!p.code;
     const body = tabDefs.length > 1 ? t.el : form;
 
     const save = async () => {
@@ -255,6 +257,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
         await reload();
       } }, 'Supprimer')]),
       h('span', { class: 'spacer' }),
+      ...(isDictee ? [h('button', { title: 'Reprendre la dictée : ajouter, corriger, réécouter', onclick: async () => { if (await save()) location.hash = `#/dictee/${encodeURIComponent(p.id)}`; } }, '✍ Modifier les notes')] : []),
       h('button', { onclick: () => void save() }, 'Enregistrer'),
       h('button', { class: 'primary', onclick: async () => { if (await save()) open(p); } }, 'Jouer')
     ], undefined, tabDefs.length > 1);
@@ -326,7 +329,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
           p.difficulty ? h('span', { class: 'diff', title: `Difficulté ${p.difficulty}/5` }, stars(p.difficulty)) : null,
           p.bestRun ? h('span', { class: 'rec' }, `record ${p.bestRun.wrong} faute${p.bestRun.wrong > 1 ? 's' : ''} · ${fmtTime(p.bestRun.seconds)}`) : null,
           !p.composer && !p.category && !p.tags?.length && !p.bestRun
-            ? h('span', {}, p.source === 'midi' ? 'MIDI' : p.source === 'demo' ? 'Exemple' : p.source === 'scan' ? 'PDF / photo' : p.source === 'pcn' ? 'Codification PCN' : 'MusicXML') : null
+            ? h('span', {}, p.source === 'midi' ? 'MIDI' : p.source === 'demo' ? 'Exemple' : p.source === 'scan' ? 'PDF / photo' : p.source === 'pcn' ? 'Codification PCN' : p.source === 'dictee' ? 'Dictée' : 'MusicXML') : null
         ])
       ]),
       h('button', { class: 'icon', title: 'Fiche, classement', onclick: () => editPiece(p) }, '✎')
@@ -521,12 +524,15 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
   // ---------- ajouter ----------
   const openAdd = () => openSheet('Ajouter une partition', isOud ? [
     { icon: '📁', label: 'Importer un fichier', desc: 'PDF, photo, MusicXML, MIDI ou codification PCN', onClick: () => fileInput.click() },
-    { icon: '📷', label: 'Photographier une page', desc: 'Claude lit la mélodie, quarts de ton compris', onClick: () => cameraInput.click() }
+    { icon: '📷', label: 'Photographier une page', desc: 'Claude lit la mélodie, quarts de ton compris', onClick: () => cameraInput.click() },
+    { icon: '✍', label: 'Dictée : écrire en jouant', desc: 'Le micro écoute le oud, les notes s’écrivent sur la portée', onClick: goDictee }
   ] : [
     { icon: '📁', label: 'Importer un fichier', desc: 'PDF, photo, MusicXML, MIDI ou codification PCN', onClick: () => fileInput.click() },
     { icon: '📷', label: 'Photographier une page', desc: 'Claude lit la partition note par note', onClick: () => cameraInput.click() },
-    { icon: '📚', label: 'Catalogue de pièces célèbres', desc: 'Bach, Beethoven, Chopin… (domaine public)', onClick: () => openCatalogue(() => void reload(), id => open({ id } as Piece)) }
+    { icon: '📚', label: 'Catalogue de pièces célèbres', desc: 'Bach, Beethoven, Chopin… (domaine public)', onClick: () => openCatalogue(() => void reload(), id => open({ id } as Piece)) },
+    { icon: '✍', label: 'Dictée : écrire en jouant', desc: 'Clavier branché ou micro : les notes s’écrivent sur la portée', onClick: goDictee }
   ]);
+  function goDictee(): void { unlockAudio(); location.hash = '#/dictee'; }
 
   // ---------- aide ----------
   const openHelp = () => {
@@ -646,6 +652,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
     navBtn('partitions', '🎼', 'Partitions'),
     isOud ? h('button', { class: 'nav-item', onclick: () => { unlockAudio(); location.hash = '#/oud/accorder'; } }, [h('span', { class: 'nav-icon' }, '🎚'), h('span', {}, 'Accorder')]) : null,
     navBtn('apprendre', '🎓', 'Apprendre'),
+    h('button', { class: 'nav-item', title: 'Écrire les notes en jouant', onclick: () => goDictee() }, [h('span', { class: 'nav-icon' }, '✍'), h('span', {}, 'Dictée')]),
     h('button', { class: 'nav-item nav-add', onclick: openAdd }, [h('span', { class: 'nav-icon' }, '＋'), h('span', {}, 'Ajouter')]),
     navBtn('plus', '☰', 'Plus', plusBadge)
   ]);
@@ -659,7 +666,7 @@ export async function showLibrary(app: HTMLElement): Promise<void> {
   app.replaceChildren(h('div', { class: 'home' }, [
     h('header', { class: 'home-head' }, [
       h('img', { src: 'icon.svg', alt: '', class: 'logo' }),
-      h('div', { class: 'home-name' }, [h('h1', {}, 'Piano Compagnon'), h('div', { class: 'tag' }, 'La partition avance quand vous jouez juste.')]),
+      h('div', { class: 'home-name' }, [h('h1', {}, 'My Music Inst'), h('div', { class: 'tag' }, 'La partition avance quand vous jouez juste.')]),
       chip
     ]),
     h('div', { class: 'domain-tabs', role: 'tablist' }, ([['piano', '🎹 Piano'], ['oud', 'عود  Oud']] as [Domain, string][]).map(([d, label]) =>

@@ -1,4 +1,6 @@
-# Piano Compagnon — guide pour Claude Code
+# My Music Inst (ex-Piano Compagnon) — guide pour Claude Code
+
+Nom affiché : **My Music Inst**. Les identifiants techniques gardent l'ancien nom et ne doivent pas changer : `app.pianocompagnon` (Android), dépôt et APK `PianoCompagnon`, base SQL, tâche planifiée, en-tête PCN `PIANO-COMPAGNON`.
 
 Application personnelle de Saad (et de son fils) pour travailler le piano : partition affichée, piano numérique branché en USB-MIDI, la partition n'avance que sur les bonnes notes. Projet indépendant de Nordic Timber / ND.
 
@@ -12,6 +14,7 @@ Application personnelle de Saad (et de son fils) pour travailler le piano : part
 - `src/codification.ts` — format maison **PCN** (une ligne par mesure). C'est la référence stockée ; le MusicXML en est régénéré à l'ouverture.
 - `src/musicxml.ts` — notes → MusicXML (2 portées, voix multiples).
 - `src/player.ts` — écran de jeu (mode attente, mains, boucle, écoute).
+- `src/dictation.ts` / `src/notation.ts` — Dictée : notes jouées (MIDI, clavier écran, micro, fichier audio) écrites sur portée + texte, édition façon traitement de texte, écoute piano/oud, enregistrement en pièce `source: 'dictee'` (PCN).
 - `src/learn.ts` — modules Apprendre (lecture, accords, gammes, oreille).
 - `src/storage.ts` / `src/sync.ts` / `src/api.ts` — stockage local par utilisateur + synchronisation.
 - `src/repertoire.ts` — répertoire de départ (domaine public uniquement).

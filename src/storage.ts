@@ -7,7 +7,7 @@ export interface Piece {
   id: string;
   title: string;
   xml: string;
-  source: 'musicxml' | 'midi' | 'demo' | 'scan' | 'pcn';
+  source: 'musicxml' | 'midi' | 'demo' | 'scan' | 'pcn' | 'dictee';
   instrument?: 'oud'; // absent = piano
   code?: string; // codification PCN (référence quand elle existe)
   hasOriginal?: boolean; // photo(s) / PDF d'origine conservés

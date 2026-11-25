@@ -1,6 +1,6 @@
 import './styles.css';
 import { registerSW } from 'virtual:pwa-register';
-import { getPiece } from './storage';
+import { getPiece, pref, setPref } from './storage';
 import { seedRepertoire } from './repertoire';
 import { startAutoSync } from './sync';
 import { parsePcn, pcnToXml } from './codification';
@@ -10,9 +10,10 @@ import { Player } from './player';
 import { createTrainer } from './learn';
 import { createOudTrainer } from './oudLearn';
 import { createTunerPage } from './oudTuner';
+import { createDictation } from './dictation';
 import { showLibrary } from './library';
-import { checkForUpdate, isNative } from './updates';
-import { enableHorizontalScroll } from './ui';
+import { checkForUpdate, installUpdate, isNative, versionLabel, type UpdateState } from './updates';
+import { enableHorizontalScroll, h, openModal } from './ui';
 
 registerSW({ immediate: true });
 enableHorizontalScroll();
@@ -28,6 +29,7 @@ function route(): void {
   if (m) void openPlayer(decodeURIComponent(m[1]));
   else if (l) openTrainer(l[1]);
   else if (location.hash === '#/oud/accorder') openTuner();
+  else if (/^#\/dictee(\/|$)/.test(location.hash)) openDictation(decodeURIComponent(location.hash.slice('#/dictee/'.length)) || null);
   else void showLibrary(app);
 }
 
@@ -36,6 +38,13 @@ function openTuner(): void {
   player = t;
   app.replaceChildren(t.el);
   t.mount();
+}
+
+function openDictation(id: string | null): void {
+  const d = createDictation(id, () => { location.hash = '#/'; });
+  player = d;
+  app.replaceChildren(d.el);
+  void d.mount();
 }
 
 function openTrainer(id: string): void {
@@ -68,5 +77,25 @@ void (async () => {
   void loadPiano();
   window.addEventListener('pointerdown', () => unlockAudio(), { once: true });
   // nouvelle version de l'APK ? (le navigateur, lui, se met à jour par le service worker)
-  if (isNative()) void checkForUpdate();
+  if (isNative()) void checkForUpdate().then(forceUpdate);
 })();
+
+/** Nouvelle version au lancement : le téléchargement démarre de lui-même (Android demande ensuite de confirmer l'installation). */
+function forceUpdate(u: UpdateState): void {
+  if (u.state !== 'available') return;
+  const body = h('div', { class: 'form' }, [
+    h('h3', {}, `Nouvelle version ${u.latest} disponible`),
+    h('p', {}, `Installée : ${versionLabel()}. Le téléchargement de la nouvelle version démarre : touchez ensuite le fichier PianoCompagnon.apk puis « Installer ». Vos partitions sont conservées.`),
+    h('p', { class: 'meta' }, 'Si rien ne se passe, touchez « Installer maintenant ».')
+  ]);
+  const close = openModal('Mise à jour', body, [
+    h('button', { onclick: () => close() }, 'Plus tard'),
+    h('span', { class: 'spacer' }),
+    h('button', { class: 'primary', onclick: () => installUpdate() }, 'Installer maintenant')
+  ]);
+  // une seule ouverture automatique par version, pour ne pas boucler si l'installation est refusée
+  if (pref<number>('upd.forced', 0) !== u.latest) {
+    setPref('upd.forced', u.latest);
+    setTimeout(() => installUpdate(), 1200);
+  }
+}

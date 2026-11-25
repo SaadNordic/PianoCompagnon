@@ -33,13 +33,29 @@ const ETUDES: Etude[] = [
   ] }
 ];
 
+const AUTHOR = 'My Music Inst';
+
 const code = (e: Etude, title: string) => [
-  PCN_HEADER, `TITLE: ${title}`, 'COMPOSER: Piano Compagnon', 'INSTRUMENT: oud', 'TIME: 4/4', 'KEY: 0', `TEMPO: ${e.tempo}`,
+  PCN_HEADER, `TITLE: ${title}`, `COMPOSER: ${AUTHOR}`, 'INSTRUMENT: oud', 'TIME: 4/4', 'KEY: 0', `TEMPO: ${e.tempo}`,
   ...e.measures.map((m, i) => `M${i + 1} | RH: ${m}`)
 ].join('\n') + '\n';
 
+/** Études déjà installées et jamais modifiées : remplace l'ancien nom de l'appli (sans synchroniser). */
+async function renameOudAuthor(): Promise<void> {
+  const flag = `renamed.oud1.${ns()}`;
+  if (pref(flag, false)) return;
+  for (const e of ETUDES) {
+    const p = await getPiece(e.id);
+    if (p && !p.updatedAt && p.composer === 'Piano Compagnon') {
+      await storePiece({ ...p, composer: AUTHOR, code: p.code?.replace('COMPOSER: Piano Compagnon', `COMPOSER: ${AUTHOR}`) });
+    }
+  }
+  setPref(flag, true);
+}
+
 /** Ajoute les études dans l'espace courant (une fois par espace, sans synchroniser). */
 export async function seedOud(): Promise<void> {
+  await renameOudAuthor();
   const flag = `seeded.oud1.${ns()}`;
   if (pref(flag, false)) return;
   let t = Date.now();
@@ -48,7 +64,7 @@ export async function seedOud(): Promise<void> {
     const title = `Étude en maqam ${e.maqam}`;
     const pcn = code(e, title);
     await storePiece({
-      id: e.id, title, composer: 'Piano Compagnon', difficulty: e.difficulty, tags: [e.maqam.toLowerCase()], category: 'Études',
+      id: e.id, title, composer: AUTHOR, difficulty: e.difficulty, tags: [e.maqam.toLowerCase()], category: 'Études',
       instrument: 'oud', code: pcn, xml: pcnToXml(parsePcn(pcn), title), source: 'pcn', addedAt: t--, updatedAt: 0
     });
   }

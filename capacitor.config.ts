@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'app.pianocompagnon',
-  appName: 'Piano Compagnon',
+  appName: 'My Music Inst',
   webDir: 'dist',
   android: { backgroundColor: '#14161c' }
 };

@@ -28,7 +28,7 @@ export function toast(msg: string, ms = 1600): void {
   toastTimer = window.setTimeout(() => t!.classList.remove('show'), ms);
 }
 
-/** Fenêtre modale à taille fixe : seul le corps défile. Renvoie la fonction de fermeture. */
+/** Fenêtre modale à taille fixe : seul le corps défile. Un clic à l'extérieur ne la ferme pas. Renvoie la fonction de fermeture. */
 export function openModal(title: string, body: HTMLElement, footer: HTMLElement[], onClose?: () => void, flush = false): () => void {
   let closed = false;
   const close = () => {
@@ -39,7 +39,7 @@ export function openModal(title: string, body: HTMLElement, footer: HTMLElement[
     onClose?.();
   };
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-  const overlay = h('div', { class: 'modal-overlay', onclick: (e: Event) => { if (e.target === overlay) close(); } }, [
+  const overlay = h('div', { class: 'modal-overlay' }, [
     h('div', { class: 'modal', role: 'dialog' }, [
       h('div', { class: 'modal-head' }, [h('div', { class: 'modal-title' }, title), h('button', { class: 'icon', onclick: close, title: 'Fermer' }, '✕')]),
       h('div', { class: 'modal-body' + (flush ? ' flush' : '') }, body),
@@ -101,7 +101,7 @@ export function menuRow(item: MenuItem): HTMLElement {
   ]);
 }
 
-/** Menu d'actions qui monte du bas de l'écran (liste courte et fixe). */
+/** Menu d'actions qui monte du bas de l'écran (liste courte et fixe). Un clic à l'extérieur ne le ferme pas. */
 export function openSheet(title: string, items: MenuItem[]): () => void {
   let closed = false;
   const close = () => {
@@ -111,7 +111,7 @@ export function openSheet(title: string, items: MenuItem[]): () => void {
     document.removeEventListener('keydown', onKey);
   };
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-  const overlay = h('div', { class: 'sheet-overlay', onclick: (e: Event) => { if (e.target === overlay) close(); } }, [
+  const overlay = h('div', { class: 'sheet-overlay' }, [
     h('div', { class: 'sheet', role: 'menu' }, [
       h('div', { class: 'sheet-title' }, title),
       ...items.map(it => menuRow({ ...it, onClick: () => { close(); it.onClick(); } })),
