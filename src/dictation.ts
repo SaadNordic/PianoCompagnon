@@ -204,13 +204,13 @@ export function createDictation(pieceId: string | null, onBack: () => void): Dic
     h('button', { title: 'Tout sélectionner (Ctrl+A)', onclick: () => selectAll() }, 'Tout'),
     h('button', { title: 'Écrire ou corriger les notes au clavier, comme un texte', onclick: () => openTextEditor() }, '✎ Texte'),
     kbBtn,
-    h('button', { title: 'Commencer une nouvelle dictée', onclick: () => newDoc() }, '🗋 Nouveau'),
+    h('button', { title: 'Commencer une nouvelle dictée', onclick: () => void newDoc() }, '🗋 Nouveau'),
     h('button', { title: 'Aide', onclick: () => openHelp() }, '❓')
   ]);
 
   const el = h('div', { class: 'trainer dictation' }, [
     h('header', { class: 'bar' }, [
-      h('button', { class: 'icon', title: 'Retour', onclick: () => leave() }, '←'),
+      h('button', { class: 'icon', title: 'Retour', onclick: () => void leave() }, '←'),
       h('span', { class: 'dt-label' }, '✍'),
       titleInput,
       playBtn,
@@ -548,8 +548,31 @@ export function createDictation(pieceId: string | null, onBack: () => void): Dic
     changed();
   };
 
-  const newDoc = () => {
-    if (events.length && dirty && !confirm('Commencer une nouvelle dictée ? Les notes non enregistrées seront perdues.')) return;
+  const nNotes = () => events.filter(e => e.pitches.length).length;
+  /** Question claire avant de perdre des notes : enregistrer, ignorer, ou revenir à l’édition. */
+  const askSave = (title: string, text: string, discardLabel: string): Promise<'save' | 'discard' | 'cancel'> => new Promise(resolve => {
+    let answer: 'save' | 'discard' | 'cancel' = 'cancel';
+    const pick = (a: typeof answer) => { answer = a; close(); };
+    const body = h('div', { class: 'form' }, [
+      h('h3', {}, title),
+      h('p', {}, text),
+      h('p', { class: 'meta' }, `${nNotes()} note${nNotes() > 1 ? 's' : ''}${piece ? ` · « ${piece.title} »` : ' · pas encore enregistrée'}`)
+    ]);
+    const close = openModal('Modifications non enregistrées', body, [
+      h('button', { onclick: () => pick('cancel') }, '↩ Annuler, retour à l’édition'),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'danger', onclick: () => pick('discard') }, discardLabel),
+      h('button', { class: 'primary', onclick: () => pick('save') }, '💾 Oui, enregistrer')
+    ], () => resolve(answer));
+  });
+
+  const newDoc = async () => {
+    if (events.length && dirty) {
+      const r = await askSave('Enregistrer avant de commencer une nouvelle dictée ?',
+        'Les notes écrites n’ont pas été enregistrées.', 'Non, ignorer');
+      if (r === 'cancel') return;
+      if (r === 'save' && !(await save())) return;
+    }
     stopPlay(); stopRec();
     piece = null;
     events = []; caret = 0; sel = null; undo = []; redo = [];
@@ -946,9 +969,12 @@ La notation anglaise est aussi acceptée : C4:1 Bb3:0.5`)])
 
   const leave = async () => {
     if (dirty && events.length) {
-      if (confirm('Enregistrer la dictée avant de quitter ?\n(Annuler : quitter ; le brouillon est gardé pour la prochaine fois.)')) {
-        if (!(await save())) return;
-      }
+      const r = await askSave('Enregistrer la dictée avant de quitter ?',
+        piece ? 'Les dernières modifications n’ont pas été enregistrées.' : 'Ces notes n’ont pas encore été enregistrées dans la bibliothèque.',
+        piece ? 'Non, ignorer les modifications' : 'Non, ignorer');
+      if (r === 'cancel') return;
+      if (r === 'save' && !(await save())) return;
+      if (r === 'discard') setPref('dictee.draft', null);
     }
     onBack();
   };

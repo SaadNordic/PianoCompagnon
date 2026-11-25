@@ -12,6 +12,10 @@
   --bad: #e5484d;
   --radius: 10px;
   color-scheme: dark;
+  /* marges des barres du téléphone : env() ne suffit pas sur certaines WebView Android,
+     Capacitor fournit aussi --safe-area-inset-* : on prend la plus grande des deux */
+  --sat: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --sab: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
@@ -20,7 +24,8 @@ body {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
 }
-#app { height: 100%; }
+/* tout l'écran de l'appli s'arrête au-dessus des boutons d'Android (accueil, applis ouvertes) */
+#app { height: 100%; padding-bottom: var(--sab); }
 button, select {
   font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
   border-radius: 8px; padding: 7px 12px; cursor: pointer; white-space: nowrap;
@@ -34,7 +39,7 @@ code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
 /* ---------- accueil : entête, sections, barre de navigation en bas ---------- */
 .home { display: flex; flex-direction: column; height: 100%; }
 .home-head {
-  flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+  flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: max(10px, var(--sat)) 16px 10px;
   background: var(--panel); border-bottom: 1px solid var(--line);
 }
 .home-head .logo { width: 40px; height: 40px; }
@@ -52,7 +57,7 @@ code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
 .section-intro { margin: -4px 0 12px; }
 .bottom-nav {
   flex-shrink: 0; display: flex; justify-content: center; background: var(--panel); border-top: 1px solid var(--line);
-  padding: 4px 6px max(4px, env(safe-area-inset-bottom));
+  padding: 4px 6px 4px;
 }
 .nav-item {
   flex: 1; max-width: 170px; display: flex; flex-direction: column; align-items: center; gap: 1px;
@@ -70,7 +75,7 @@ code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
 .update-banner span { flex: 1; }
 @media (max-width: 520px) { .home-head .tag { display: none; } }
 @media (max-height: 500px) {
-  .home-head { padding-top: max(6px, env(safe-area-inset-top)); padding-bottom: 6px; }
+  .home-head { padding-top: max(6px, var(--sat)); padding-bottom: 6px; }
   .home-head .logo { width: 30px; height: 30px; }
   .home-head .tag { display: none; }
   .nav-item { flex-direction: row; justify-content: center; gap: 6px; font-size: 0.85rem; padding: 3px 4px; }
@@ -92,7 +97,7 @@ code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
 .sheet-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(6, 7, 10, 0.6); display: flex; align-items: flex-end; justify-content: center; }
 .sheet {
   width: min(520px, 100%); display: flex; flex-direction: column; gap: 1px; background: var(--line);
-  border-radius: 16px 16px 0 0; overflow: hidden; padding-bottom: env(safe-area-inset-bottom); animation: sheet-up 0.18s ease-out;
+  border-radius: 16px 16px 0 0; overflow: hidden; padding-bottom: var(--sab); animation: sheet-up 0.18s ease-out;
 }
 .sheet-title { background: var(--panel); padding: 14px 16px 10px; font-weight: 650; color: var(--muted); font-size: 0.9rem; }
 .sheet-cancel { border: 0; border-radius: 0; background: var(--panel2); padding: 14px; font-weight: 600; }
@@ -175,7 +180,7 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 .form h3 { margin: 0; font-size: 1rem; }
 
 /* fenêtre modale : taille fixe, seul le corps défile */
-.modal-overlay { position: fixed; inset: 0; background: rgba(6, 7, 10, 0.65); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 12px; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(6, 7, 10, 0.65); display: flex; align-items: center; justify-content: center; z-index: 50; padding: max(12px, var(--sat)) 12px max(12px, var(--sab)); }
 .modal {
   width: min(560px, 100%); height: min(90vh, 640px); max-height: 90vh;
   display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
@@ -194,7 +199,7 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 /* ---------- lecteur ---------- */
 .player { display: flex; flex-direction: column; height: 100%; position: relative; }
 .bar {
-  display: flex; align-items: center; gap: 8px; padding: 6px 8px; padding-top: max(6px, env(safe-area-inset-top));
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; padding-top: max(6px, var(--sat));
   background: var(--panel); border-bottom: 1px solid var(--line); flex-shrink: 0;
 }
 .bar .title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -234,10 +239,15 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 .infobar .stats { margin-left: auto; color: #ff9a9d; white-space: nowrap; }
 
 /* ---------- clavier ---------- */
+.kb-wrap { flex-shrink: 0; display: flex; flex-direction: column; background: #0b0c10; }
+.kb-ctl { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 2px 6px; border-top: 1px solid var(--line); }
+.kb-ctl button { padding: 1px 10px; font-size: 0.85rem; background: var(--panel); }
+.kb-info { color: var(--muted); font-size: 0.75rem; margin: 0 auto 0 6px; white-space: nowrap; }
+@media (max-height: 500px) { .kb-ctl { padding: 1px 6px; } .kb-ctl button { padding: 0 9px; } }
 .kb {
   position: relative; height: clamp(84px, 24vh, 190px); flex-shrink: 0; background: #0b0c10;
   touch-action: none; user-select: none; -webkit-user-select: none;
-  padding-bottom: env(safe-area-inset-bottom);
+
 }
 .key { position: absolute; top: 0; }
 .key.white { height: 100%; background: linear-gradient(#f4f4f0, #fff); border: 1px solid #b8b8b0; border-top: 0; border-radius: 0 0 5px 5px; z-index: 1; }
@@ -313,7 +323,7 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 /* ---------- manche du oud ---------- */
 .neck {
   position: relative; height: clamp(104px, 26vh, 190px); flex-shrink: 0; background: #0b0c10;
-  padding: 6px 12px calc(6px + env(safe-area-inset-bottom)) 50px; touch-action: none; user-select: none; -webkit-user-select: none;
+  padding: 6px 12px 6px 50px; touch-action: none; user-select: none; -webkit-user-select: none;
 }
 .neck-board { position: relative; height: 100%; border-radius: 3px 6px 6px 3px; background: linear-gradient(90deg, #2a1c12, #3a281a); border-left: 4px solid #e4d9bd; }
 .neck-pos { position: absolute; top: 0; bottom: 0; width: 1px; background: #ffffff14; }
