@@ -152,10 +152,11 @@ export function playOud(p: number, durationSec = 1.2, velocity = 80, when = 0): 
 // ---------- manche à l'écran ----------
 
 const NECK_SPAN = 14; // demi-tons affichés après le sillet
-const neckX = (n: number) => ((1 - Math.pow(2, -n / 12)) / (1 - Math.pow(2, -NECK_SPAN / 12))) * 100;
-const neckN = (x: number) => -12 * Math.log2(1 - (x / 100) * (1 - Math.pow(2, -NECK_SPAN / 12)));
+/** Position horizontale (%) : sillet à droite (100 %), caisse à gauche. */
+const neckX = (n: number) => 100 - ((1 - Math.pow(2, -n / 12)) / (1 - Math.pow(2, -NECK_SPAN / 12))) * 100;
+const neckN = (x: number) => -12 * Math.log2(1 - ((100 - x) / 100) * (1 - Math.pow(2, -NECK_SPAN / 12)));
 
-/** Le manche, grave en haut (comme on le voit en jouant) ; même rôle que le clavier du piano. */
+/** Le manche, sillet à droite et grave en haut ; même rôle que le clavier du piano. */
 export class OudNeck {
   readonly el: HTMLDivElement;
   labels: 'none' | 'c' | 'all' = 'none';
@@ -249,7 +250,7 @@ export class OudNeck {
     const r = this.board.getBoundingClientRect();
     const row = Math.max(0, Math.min(this.strings.length - 1, Math.floor(((e.clientY - r.top) / r.height) * this.strings.length)));
     const x = ((e.clientX - r.left) / r.width) * 100;
-    const n = x <= 1.5 ? 0 : Math.round(neckN(Math.min(100, x)) * 2) / 2;
+    const n = x >= 98.5 ? 0 : Math.round(neckN(Math.max(0, x)) * 2) / 2;
     this.onTap(this.strings[row] + n);
   }
 }
