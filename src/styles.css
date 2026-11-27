@@ -216,10 +216,22 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
   background: var(--panel2); border-bottom: 1px solid var(--line); font-size: 0.88rem;
 }
 .section-bar.open { display: flex; }
+.section-bar .row-tools { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.section-bar .spacer { flex: 1; }
+.section-bar button { padding: 4px 9px; }
 .section-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .section-bar .seg button { padding: 4px 9px; white-space: nowrap; }
-.section-bar > .icon { padding: 3px 9px; }
+.section-bar .icon { padding: 3px 9px; min-width: 34px; }
+.section-bar .sec-on { min-width: 104px; }
+.section-bar button:disabled { opacity: 0.4; cursor: default; }
+.sec-bound { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.sec-bound button { border: 0; border-radius: 0; padding: 4px 8px; }
+.sec-bound .lbl { min-width: 104px; font-weight: 600; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.bar button.dim { opacity: 0.6; text-decoration: line-through; }
 .section-mark { fill: #3d7cf2; fill-opacity: 0.13; stroke: #3d7cf2; stroke-opacity: 0.55; stroke-width: 1; pointer-events: none; }
+.section-mark.off { fill-opacity: 0.04; stroke-dasharray: 4 3; }
+.section-edge { fill: #3d7cf2; pointer-events: none; }
+.section-edge.off { fill-opacity: 0.35; }
 .settings {
   position: absolute; top: 52px; right: 8px; z-index: 20; display: none; flex-direction: column; gap: 10px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; box-shadow: 0 10px 30px #0008; min-width: 230px;
@@ -402,6 +414,12 @@ textarea.pcn { flex: 1; min-height: 260px; font: 13px/1.5 ui-monospace, 'Cascadi
 /* ---------- dictée ---------- */
 .dictation .bar .dt-label { font-size: 1.2rem; }
 .dt-title { flex: 1; min-width: 0; padding: 6px 10px; }
+.dt-list { display: flex; flex-direction: column; gap: 6px; }
+.dt-item { display: flex; align-items: stretch; gap: 6px; }
+.dt-item.current .dt-item-main { border-color: var(--accent); }
+.dt-item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; white-space: normal; }
+.dt-item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.dt-item .meta { font-size: 0.8rem; }
 .dt-row { margin: 0; padding: 6px 8px; gap: 6px; background: var(--panel); border-bottom: 1px solid var(--line); align-items: center; }
 .dt-row .seg button { padding: 6px 10px; }
 .dt-rec { min-width: 118px; font-weight: 650; }

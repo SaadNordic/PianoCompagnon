@@ -213,6 +213,7 @@ export function createDictation(pieceId: string | null, onBack: () => void): Dic
       h('button', { class: 'icon', title: 'Retour', onclick: () => void leave() }, '←'),
       h('span', { class: 'dt-label' }, '✍'),
       titleInput,
+      h('button', { class: 'icon', title: 'Mes dictées enregistrées', onclick: () => openList() }, '📂'),
       playBtn,
       saveBtn
     ]),
@@ -885,9 +886,72 @@ La notation anglaise est aussi acceptée : C4:1 Bb3:0.5`)])
       <p><b>✎ Texte :</b> toutes les notes en texte (« Do3:1 Ré3:0.5… ») : on peut les écrire ou les corriger au clavier.</p>
       <p><b>Écouter :</b> ▶ joue depuis le curseur ou la sélection, au son du piano ou du oud (🔊).</p>
       <p><b>📁 Fichier audio :</b> transcrit un enregistrement (mélodie seule de préférence).</p>
-      <p><b>💾 Enregistrer :</b> la dictée rejoint « Mes partitions » (catégorie Dictées) : elle se joue ensuite comme les autres partitions. Pour la reprendre ici : fiche de la partition, « ✍ Modifier les notes ».</p>
+      <p><b>💾 Enregistrer :</b> la dictée rejoint « Mes partitions » (catégorie Dictées) : elle se joue ensuite comme les autres partitions. Pour la reprendre ici : <b>📂</b> en haut (Mes dictées), ou fiche de la partition, « ✍ Modifier les notes ».</p>
       <p><b>Au clavier d'ordinateur :</b> flèches (Maj pour sélectionner), Retour arrière, Ctrl+Z / Ctrl+Y, Ctrl+C / X / V, 1 à 5 pour les durées, « . » pointée, 0 silence, espace pour écouter.</p>` });
     const close = openModal('Aide — Dictée', body, [h('span', { class: 'spacer' }), h('button', { class: 'primary', onclick: () => close() }, 'Fermer')]);
+  };
+
+  // ---------- mes dictées ----------
+  /** Ouvre une dictée enregistrée (en proposant d'abord d'enregistrer la dictée en cours). */
+  const openSaved = async (id: string) => {
+    if (piece?.id === id) return;
+    if (events.length && dirty) {
+      const r = await askSave('Enregistrer avant d’ouvrir une autre dictée ?',
+        'Les notes écrites n’ont pas été enregistrées.', 'Non, ignorer');
+      if (r === 'cancel') return;
+      if (r === 'save' && !(await save())) return;
+    }
+    dirty = false; // rien à garder en brouillon
+    setPref('dictee.draft', null);
+    location.hash = `#/dictee/${encodeURIComponent(id)}`;
+  };
+
+  /** Liste des dictées enregistrées : reprendre ici ou jouer. */
+  const openList = () => {
+    const search = h('input', { type: 'search', placeholder: 'Chercher une dictée…' }) as HTMLInputElement;
+    const listEl = h('div', { class: 'dt-list' }, [h('p', { class: 'meta' }, 'Chargement…')]);
+    let all: Piece[] = [];
+    const fmtDate = (t: number) => new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+    const paint = () => {
+      const q = search.value.trim().toLowerCase();
+      const items = all.filter(p => !q || `${p.title} ${p.composer ?? ''} ${(p.tags ?? []).join(' ')}`.toLowerCase().includes(q));
+      if (!items.length) {
+        listEl.replaceChildren(h('p', { class: 'meta' }, all.length ? 'Aucune dictée ne correspond.' : 'Aucune dictée enregistrée pour l’instant : écrivez des notes puis 💾 Enregistrer.'));
+        return;
+      }
+      listEl.replaceChildren(...items.map(p => {
+        const current = piece?.id === p.id;
+        return h('div', { class: 'dt-item' + (current ? ' current' : '') }, [
+          h('button', { class: 'dt-item-main', title: 'Reprendre cette dictée ici', onclick: () => { close(); void openSaved(p.id); } }, [
+            h('span', { class: 'dt-item-title' }, (p.instrument === 'oud' ? '🪕 ' : '🎹 ') + p.title),
+            h('span', { class: 'meta' }, [p.composer, fmtDate(p.updatedAt ?? p.addedAt), current ? 'ouverte' : ''].filter(Boolean).join(' · '))
+          ]),
+          h('button', { class: 'icon', title: 'Jouer cette partition', onclick: async () => {
+            if (dirty && events.length) {
+              const r = await askSave('Enregistrer avant de quitter la dictée ?', 'Les notes écrites n’ont pas été enregistrées.', 'Non, ignorer');
+              if (r === 'cancel') return;
+              if (r === 'save' && !(await save())) return;
+            }
+            dirty = false;
+            setPref('dictee.draft', null);
+            close();
+            location.hash = `#/jouer/${encodeURIComponent(p.id)}`;
+          } }, '▶')
+        ]);
+      }));
+    };
+    search.addEventListener('input', paint);
+    const body = h('div', { class: 'form' }, [search, listEl]);
+    const close = openModal('Mes dictées', body, [
+      h('button', { onclick: () => { close(); void newDoc(); } }, '🗋 Nouvelle dictée'),
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'primary', onclick: () => close() }, 'Fermer')
+    ]);
+    void listPieces().then(ps => {
+      all = ps.filter(p => p.source === 'dictee' && !!p.code)
+        .sort((a, b) => (b.updatedAt ?? b.addedAt) - (a.updatedAt ?? a.addedAt));
+      paint();
+    });
   };
 
   // ---------- enregistrement ----------
